@@ -562,7 +562,7 @@ def create_from_images_raw(tfrecord_dir, image_dir, shuffle, res_log2=7, resize=
         print(f"Resizing {len(image_filenames)} images to {resize} x {resize}")
         for img in image_filenames:
             fn = os.path.split(img)[1]
-            img = np.array(Image.fromarray(img).resize((resize, resize)))
+            img = np.array(PIL.Image.fromarray(img).resize((resize, resize)))
             img.save(f"{image_dir}/resized_{resize}/{fn}")
         image_filenames = sorted(glob.glob(os.path.join(f"{image_dir}/resized_{resize}", '*')))
     if shuffle:
