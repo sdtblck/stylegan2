@@ -544,7 +544,7 @@ def create_from_hdf5(tfrecord_dir, hdf5_filename, shuffle):
 
 def create_from_images_raw(tfrecord_dir, image_dir, shuffle, res_log2=7, resize=None):
     print('Loading images from "%s"' % image_dir)
-    image_filenames = _get_all_files(image_dir)
+    image_filenames = sorted(glob.glob(os.path.join(image_dir, '*')))
     print(f"detected {len(image_filenames)} images ...")
     if len(image_filenames) == 0:
         error("No input images found")
@@ -564,7 +564,7 @@ def create_from_images_raw(tfrecord_dir, image_dir, shuffle, res_log2=7, resize=
             fn = os.path.split(img)[1]
             img = np.array(Image.fromarray(img).resize((resize, resize)))
             img.save(f"{image_dir}/resized_{resize}/{fn}")
-        image_filenames = _get_all_files(f"{image_dir}/resized_{resize}")
+        image_filenames = sorted(glob.glob(os.path.join(f"{image_dir}/resized_{resize}", '*')))
     if shuffle:
         print("Shuffle the images...")
     with TFRecordExporter(tfrecord_dir, len(image_filenames), res_log2=res_log2) as tfr:
