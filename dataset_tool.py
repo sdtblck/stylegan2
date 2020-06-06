@@ -555,6 +555,7 @@ def create_from_images_raw(tfrecord_dir, image_dir, shuffle, res_log2=7, resize=
     if channels not in [1, 3]:
         error("Input images must be stored as RGB or grayscale")
     if resize is not None:
+        out_dir = os.path.abspath(os.path.join(image_dir, os.pardir))
         try:
             os.mkdir(f"{image_dir}/resized_{resize}")
         except:
@@ -565,8 +566,8 @@ def create_from_images_raw(tfrecord_dir, image_dir, shuffle, res_log2=7, resize=
                 print(f"Resized {count} imgs")
             fn = os.path.split(img)[1]
             img = PIL.Image.open(img).resize((resize, resize))
-            img.save(f"{image_dir}/resized_{resize}/{fn}")
-        image_filenames = sorted(glob.glob(os.path.join(f"{image_dir}/resized_{resize}", '*')))
+            img.save(f"{out_dir}/resized_{resize}/{fn}")
+        image_filenames = sorted(glob.glob(os.path.join(f"{out_dir}/resized_{resize}", '*')))
     if shuffle:
         print("Shuffle the images...")
     with TFRecordExporter(tfrecord_dir, len(image_filenames), res_log2=res_log2) as tfr:
