@@ -682,6 +682,9 @@ def execute_cmdline(argv):
         default=None,
         required=False
     )
+    p.add_argument(     '--res_log2',        help='resolution log2', type=int, default=9)
+    p.add_argument(     '--shuffle',        help='Randomize image order (default: 1)', type=int, default=1)
+
 
     p = add_command(    'create_from_hdf5', 'Create dataset from legacy HDF5 archive.',
                                             'create_from_hdf5 datasets/celebahq ~/downloads/celeba-hq-1024x1024.h5')
