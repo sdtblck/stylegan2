@@ -557,7 +557,7 @@ def create_from_images_raw(tfrecord_dir, image_dir, shuffle, res_log2=7, resize=
     if resize is not None:
         out_dir = os.path.abspath(os.path.join(image_dir, os.pardir))
         try:
-            os.mkdir(f"{image_dir}/resized_{resize}")
+            {out_dir}/resized_{resize}/
         except:
             pass
         print(f"Resizing {len(image_filenames)} images to {resize} x {resize}")
