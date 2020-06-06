@@ -560,7 +560,9 @@ def create_from_images_raw(tfrecord_dir, image_dir, shuffle, res_log2=7, resize=
         except:
             pass
         print(f"Resizing {len(image_filenames)} images to {resize} x {resize}")
-        for img in image_filenames:
+        for count, img in enumerate(image_filenames):
+            if count % 1000 == 0:
+                print(f"Resized {count} imgs")
             fn = os.path.split(img)[1]
             img = PIL.Image.open(img).resize((resize, resize))
             img.save(f"{image_dir}/resized_{resize}/{fn}")
