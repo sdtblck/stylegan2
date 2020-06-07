@@ -25,7 +25,7 @@ class TFRecordDataset:
         tfrecord_dir,               # Directory containing a collection of tfrecords files.
         resolution      = None,     # Dataset resolution, None = autodetect.
         label_file      = None,     # Relative path of the labels file, None = autodetect.
-        max_label_size  = None,        # 0 = no labels, 'full' = full labels, <int> = N first label components.
+        max_label_size  = None,     # 0 = no labels, 'full' = full labels, <int> = N first label components.
         max_images      = None,     # Maximum number of images to use, None = use all images.
         repeat          = True,     # Repeat dataset indefinitely?
         shuffle_mb      = 4096,     # Shuffle data within specified window (megabytes), 0 = disable shuffling.
@@ -84,12 +84,9 @@ class TFRecordDataset:
             
         # Autodetect label filename.
         if self.label_file is None:
-            if 'LABEL_FILE' in os.environ:
-                self.label_file = os.environ['LABEL_FILE']
-            else:
-                guess = sorted(tf.io.gfile.glob(os.path.join(self.tfrecord_dir, '*.labels')))
-                if len(guess):
-                    self.label_file = guess[0]
+            guess = sorted(tf.io.gfile.glob(os.path.join(self.tfrecord_dir, '*.labels')))
+            if len(guess):
+                self.label_file = guess[0]
         elif not tf.io.gfile.exists(self.label_file):
             guess = os.path.join(self.tfrecord_dir, self.label_file)
             if tf.io.gfile.exists(guess):
@@ -169,17 +166,22 @@ class TFRecordDataset:
 
     # Get next minibatch as NumPy arrays.
     def get_minibatch_np(self, minibatch_size, lod=0): # => images, labels
-        self.configure(minibatch_size, lod)
-        with tf.name_scope('Dataset'):
-            if self._tf_minibatch_np is None:
-                self._tf_minibatch_np = self.get_minibatch_tf()
-            return tflib.run(self._tf_minibatch_np)
+        while True:
+            self.configure(minibatch_size, lod)
+            with tf.name_scope('Dataset'):
+                if self._tf_minibatch_np is None:
+                    self._tf_minibatch_np = self.get_minibatch_tf()
+                try:
+                    return tflib.run(self._tf_minibatch_np)
+                except errors_impl.AbortedError:
+                    import traceback
+                    traceback.print_exc()
 
     # Get random labels as TensorFlow expression.
     def get_random_labels_tf(self, minibatch_size): # => labels
         with tf.name_scope('Dataset'):
             if self.label_size > 0:
-                with tf.device('/cpu:0'):
+                with tflex.device('/cpu:0'):
                     return tf.gather(self._tf_labels_var, tf.random_uniform([minibatch_size], 0, self._np_labels.shape[0], dtype=tf.int32))
             return tf.zeros([minibatch_size, 0], self.label_dtype)
 
@@ -197,6 +199,12 @@ class TFRecordDataset:
             'data': tf.FixedLenFeature([], tf.string)})
         data = tf.decode_raw(features['data'], tf.uint8)
         return tf.reshape(data, features['shape'])
+
+    # Parse individual image from a tfrecords file into TensorFlow expression.
+    @staticmethod
+    def parse_tfrecord_tf_float(record):
+        img = TFRecordDataset.parse_tfrecord_tf(record)
+        return tf.cast(img, dtype=tf.float32)
 
     # Parse individual image from a tfrecords file into NumPy array.
     @staticmethod

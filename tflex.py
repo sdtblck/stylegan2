@@ -314,7 +314,8 @@ def print_backtrace():
 class Session(tf.Session):
   def __init__(self, target='auto', graph=None, config=None, init_tpu=False, id=None):
     if config is None:
-      config = tf.ConfigProto(operation_timeout_in_ms=6000 * 60 * 1000,
+      timeout_in_ms = int(os.environ['TIMEOUT_IN_MS']) if 'TIMEOUT_IN_MS' in os.environ else 10 * 60 * 1000
+      config = tf.ConfigProto(operation_timeout_in_ms=timeout_in_ms,
                               graph_options=tf.GraphOptions(
                                 rewrite_options=rewriter_config_pb2.RewriterConfig(
                                   disable_meta_optimizer=True)),
@@ -958,3 +959,20 @@ def device(name=''):
   if 'cpu' in name:
     return tf.device(name)
   return nullcontext()
+
+def tuples(l, n=2):
+  r = []
+  for i in range(0, len(l), n):
+    r.append(l[i:i+n])
+  return r
+
+import hashlib
+
+def sha256hex(x):
+  if isinstance(x, str):
+    x = x.encode('utf8')
+  return hashlib.sha224(x).hexdigest()
+
+def sha256label(x):
+  return [int(x, 16) / 255 * 2 - 1 for x in tuples(sha256hex(x))]
+

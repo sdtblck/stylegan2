@@ -6,6 +6,7 @@
 
 """Network architectures used in the StyleGAN2 paper."""
 
+import os
 import numpy as np
 import tensorflow as tf
 import dnnlib
@@ -13,6 +14,7 @@ import dnnlib.tflib as tflib
 from dnnlib.tflib.ops.upfirdn_2d import upsample_2d, downsample_2d, upsample_conv_2d, conv_downsample_2d
 from dnnlib.tflib.ops.fused_bias_act import fused_bias_act
 import functools
+from dnnlib.tflib.autosummary import autosummary, autoimages
 
 # NOTE: Do not import any application-specific modules here!
 # Specify all network parameters as kwargs.
@@ -55,7 +57,7 @@ def dense_layer(x, fmaps, gain=1, use_wscale=True, lrmul=1, weight_var='weight')
 def conv2d_layer(x, fmaps, kernel, up=False, down=False, resample_kernel=None, gain=1, use_wscale=True, lrmul=1, weight_var='weight'):
     assert not (up and down)
     assert kernel >= 1 and kernel % 2 == 1
-    w = get_weight([kernel, kernel, x.shape[1].value, fmaps], gain=gain, use_wscale=use_wscale, lrmul=lrmul, weight_var=weight_var)
+    w = graph_spectral_norm(get_weight([kernel, kernel, x.shape[1].value, fmaps], gain=gain, use_wscale=use_wscale, lrmul=lrmul, weight_var=weight_var))
     if up:
         x = _o(upsample_conv_2d(_i(x), tf.cast(w, x.dtype), data_format='NHWC', k=resample_kernel))
     elif down:
@@ -95,7 +97,7 @@ def modulated_conv2d_layer(x, y, fmaps, kernel, up=False, down=False, demodulate
     assert kernel >= 1 and kernel % 2 == 1
 
     # Get weight.
-    w = get_weight([kernel, kernel, x.shape[1].value, fmaps], gain=gain, use_wscale=use_wscale, lrmul=lrmul, weight_var=weight_var)
+    w = graph_spectral_norm(get_weight([kernel, kernel, x.shape[1].value, fmaps], gain=gain, use_wscale=use_wscale, lrmul=lrmul, weight_var=weight_var))
     ww = w[np.newaxis] # [BkkIO] Introduce minibatch dimension.
 
     # Modulate.
@@ -263,7 +265,7 @@ def G_mapping(
     mapping_fmaps           = 512,          # Number of activations in the mapping layers.
     mapping_lrmul           = 0.01,         # Learning rate multiplier for the mapping layers.
     mapping_nonlinearity    = 'lrelu',      # Activation function: 'relu', 'lrelu', etc.
-    normalize_latents       = False,        # Normalize latent vectors (Z) before feeding them to the mapping layers?
+    normalize_latents       = True,         # Normalize latent vectors (Z) before feeding them to the mapping layers?
     dtype                   = 'float32',    # Data type to use for activations and outputs.
     **_kwargs):                             # Ignore unrecognized keyword args.
 
@@ -326,6 +328,8 @@ def G_synthesis_stylegan_revised(
     is_template_graph   = False,        # True = template graph constructed by the Network class, False = actual evaluation.
     force_clean_graph   = False,        # True = construct a clean graph that looks nice in TensorBoard, False = default behavior.
     **_kwargs):                         # Ignore unrecognized keyword args.
+
+    num_channels = int(os.environ["NUM_CHANNELS"]) if "NUM_CHANNELS" in os.environ else num_channels
 
     resolution_log2 = int(np.log2(resolution))
     assert resolution == 2**resolution_log2 and resolution >= 4
@@ -435,6 +439,8 @@ def G_synthesis_stylegan2(
     fused_modconv       = True,         # Implement modulated_conv2d_layer() as a single fused op?
     **_kwargs):                         # Ignore unrecognized keyword args.
 
+    num_channels = int(os.environ["NUM_CHANNELS"]) if "NUM_CHANNELS" in os.environ else num_channels
+
     resolution_log2 = int(np.log2(resolution))
     assert resolution == 2**resolution_log2 and resolution >= 4
     def nf(stage): return np.clip(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_min, fmap_max)
@@ -483,7 +489,7 @@ def G_synthesis_stylegan2(
     def torgb(x, y, res): # res = 2..resolution_log2
         with tf.variable_scope('ToRGB'):
             t = apply_bias_act(modulated_conv2d_layer(x, dlatents_in[:, res*2-3], fmaps=num_channels, kernel=1, demodulate=False, fused_modconv=fused_modconv))
-            return t if y is None else y + t
+            return graph_images(t if y is None else y + t, res=2**res)
 
     # Early layers.
     y = None
@@ -534,6 +540,8 @@ def D_stylegan(
     structure           = 'auto',       # 'fixed' = no progressive growing, 'linear' = human-readable, 'recursive' = efficient, 'auto' = select automatically.
     is_template_graph   = False,        # True = template graph constructed by the Network class, False = actual evaluation.
     **_kwargs):                         # Ignore unrecognized keyword args.
+
+    num_channels = int(os.environ["NUM_CHANNELS"]) if "NUM_CHANNELS" in os.environ else num_channels
 
     resolution_log2 = int(np.log2(resolution))
     assert resolution == 2**resolution_log2 and resolution >= 4
@@ -602,9 +610,7 @@ def D_stylegan(
 
     # Output layer with label conditioning from "Which Training Methods for GANs do actually Converge?"
     with tf.variable_scope('Output'):
-        x = apply_bias_act(dense_layer(x, fmaps=max(labels_in.shape[1], 1)))
-        if labels_in.shape[1] > 0:
-            x = tf.reduce_sum(x * labels_in, axis=1, keepdims=True)
+        x = apply_bias_act(dense_layer(x, fmaps=1))
     scores_out = x
 
     # Output.
@@ -634,6 +640,8 @@ def D_stylegan2(
     dtype               = 'float32',    # Data type to use for activations and outputs.
     resample_kernel     = [1,3,3,1],    # Low-pass filter to apply when resampling activations. None = no filtering.
     **_kwargs):                         # Ignore unrecognized keyword args.
+
+    num_channels = int(os.environ["NUM_CHANNELS"]) if "NUM_CHANNELS" in os.environ else num_channels
 
     resolution_log2 = int(np.log2(resolution))
     assert resolution == 2**resolution_log2 and resolution >= 4
@@ -694,9 +702,7 @@ def D_stylegan2(
 
     # Output layer with label conditioning from "Which Training Methods for GANs do actually Converge?"
     with tf.variable_scope('Output'):
-        x = apply_bias_act(dense_layer(x, fmaps=max(labels_in.shape[1], 1)))
-        if labels_in.shape[1] > 0:
-            x = tf.reduce_sum(x * labels_in, axis=1, keepdims=True)
+        x = apply_bias_act(dense_layer(x, fmaps=1))
     scores_out = x
 
     # Output.
@@ -732,7 +738,7 @@ def weight_initializer(initializer=NORMAL_INIT, stddev=0.02):
   raise ValueError("Unknown weight initializer {}.".format(initializer))
 
 #@gin.configurable(blacklist=["inputs"])
-def spectral_norm(inputs, epsilon=1e-12, singular_value="left"):
+def spectral_norm(inputs, epsilon=1e-12, singular_value="left", return_normalized=True, power_iteration_rounds=1):
   """Performs Spectral Normalization on a weight tensor.
 
   Details of why this is helpful for GAN's can be found in "Spectral
@@ -775,13 +781,13 @@ def spectral_norm(inputs, epsilon=1e-12, singular_value="left"):
       shape=u_shape,
       dtype=w.dtype,
       initializer=tf.random_normal_initializer(),
+      collections=[tf.GraphKeys.LOCAL_VARIABLES],
       trainable=False, use_resource=True)
   u = u_var
 
   # Use power iteration method to approximate the spectral norm.
   # The authors suggest that one round of power iteration was sufficient in the
   # actual experiment to achieve satisfactory performance.
-  power_iteration_rounds = 1
   for _ in range(power_iteration_rounds):
     if singular_value == "left":
       # `v` approximates the first right singular vector of matrix `w`.
@@ -808,12 +814,48 @@ def spectral_norm(inputs, epsilon=1e-12, singular_value="left"):
     norm_value = tf.matmul(tf.matmul(v, w), u, transpose_b=True)
   norm_value.shape.assert_is_fully_defined()
   norm_value.shape.assert_is_compatible_with([1, 1])
+  if return_normalized:
+    w_normalized = w / norm_value
+    # Deflate normalized weights to match the unnormalized tensor.
+    w_tensor_normalized = tf.reshape(w_normalized, inputs.shape)
+    return w_tensor_normalized
+  else:
+    return w, norm_value
 
-  w_normalized = w / norm_value
+def graph_name(name):
+  name = name.split(':')[0]
+  name = name.split('/strided_slice_')[0]
+  name = name.split('/Identity_')[0]
+  if name.startswith('D_loss/G/G_synthesis/'):
+    name = name.replace('D_loss/G/G_synthesis/', '')
+    return 'G_' + name
+  elif name.startswith('D_loss/D/'):
+    name = name.replace('D_loss/D/', '')
+    return 'D_' + name
 
-  # Deflate normalized weights to match the unnormalized tensor.
-  w_tensor_normalized = tf.reshape(w_normalized, inputs.shape)
-  return w_tensor_normalized
+def graph_spectral_norm(w):
+  w1, norm = spectral_norm(w, return_normalized=False)
+  value = norm[0][0]
+  name = graph_name(value.name)
+  if name is not None:
+    autosummary('specnorm_' + name, value)
+  else:
+    tf.logging.info('ignoring autosummary(%s, %s)', repr(value.name), repr(value))
+  if 'USE_SPECNORM' in os.environ:
+    tf.logging.info('Using spectral normalization for %s', repr(w))
+    w_normalized = w1 / norm
+    w_normalized = tf.reshape(w_normalized, w.shape)
+    return w_normalized
+  return w
+
+def graph_images(images, res):
+    value = tf.identity(images)
+    name = graph_name(value.name)
+    if name is not None:
+      autoimages(name, value, res=res)
+    else:
+      tf.logging.info('ignoring autoimages(%s, %s)', repr(name), repr(value))
+    return images
 
 def conv2d(inputs, output_dim, k_h, k_w, d_h, d_w, stddev=0.02, name="conv2d",
            use_sn=False, use_bias=True):
@@ -824,7 +866,7 @@ def conv2d(inputs, output_dim, k_h, k_w, d_h, d_w, stddev=0.02, name="conv2d",
         initializer=weight_initializer(stddev=stddev), use_resource=True)
     if use_sn:
       w = spectral_norm(w)
-    outputs = tf.nn.conv2d(inputs, w, strides=[1, d_h, d_w, 1], padding="SAME")
+    outputs = _o(tf.nn.conv2d(_i(inputs), w, strides=[1, d_h, d_w, 1], padding="SAME", data_format="NHWC"))
     if use_bias:
       bias = tf.get_variable(
           "bias", [output_dim], initializer=tf.constant_initializer(0.0), use_resource=True)

@@ -9,14 +9,12 @@
 import os
 import numpy as np
 import tensorflow as tf
-from tensorflow.contrib import tpu
 import tflex
-import tqdm
 import time
 import dnnlib
 import dnnlib.tflib as tflib
 import traceback
-from dnnlib.tflib.autosummary import autosummary
+from dnnlib.tflib.autosummary import autosummary, get_tpu_summary, set_num_replicas
 
 from training import dataset
 from training import misc
@@ -33,19 +31,21 @@ def process_reals(x, labels, lod, mirror_augment, drange_data, drange_net):
     if mirror_augment:
         with tf.name_scope('MirrorAugment'):
             x = tf.where(tf.random_uniform([tf.shape(x)[0]]) < 0.5, x, tf.reverse(x, [3]))
-    with tf.name_scope('FadeLOD'): # Smooth crossfade between consecutive levels-of-detail.
-        s = tf.shape(x)
-        y = tf.reshape(x, [-1, s[1], s[2]//2, 2, s[3]//2, 2])
-        y = tf.reduce_mean(y, axis=[3, 5], keepdims=True)
-        y = tf.tile(y, [1, 1, 1, 2, 1, 2])
-        y = tf.reshape(y, [-1, s[1], s[2], s[3]])
-        x = tflib.lerp(x, y, lod - tf.floor(lod))
-    with tf.name_scope('UpscaleLOD'): # Upscale to match the expected input/output size of the networks.
-        s = tf.shape(x)
-        factor = tf.cast(2 ** tf.floor(lod), tf.int32)
-        x = tf.reshape(x, [-1, s[1], s[2], 1, s[3], 1])
-        x = tf.tile(x, [1, 1, 1, factor, 1, factor])
-        x = tf.reshape(x, [-1, s[1], s[2] * factor, s[3] * factor])
+    assert lod == 0.0
+    if False:
+        with tf.name_scope('FadeLOD'): # Smooth crossfade between consecutive levels-of-detail.
+            s = tf.shape(x)
+            y = tf.reshape(x, [-1, s[1], s[2]//2, 2, s[3]//2, 2])
+            y = tf.reduce_mean(y, axis=[3, 5], keepdims=True)
+            y = tf.tile(y, [1, 1, 1, 2, 1, 2])
+            y = tf.reshape(y, [-1, s[1], s[2], s[3]])
+            x = tflib.lerp(x, y, lod - tf.floor(lod))
+        with tf.name_scope('UpscaleLOD'): # Upscale to match the expected input/output size of the networks.
+            s = tf.shape(x)
+            factor = tf.cast(2 ** tf.floor(lod), tf.int32)
+            x = tf.reshape(x, [-1, s[1], s[2], 1, s[3], 1])
+            x = tf.tile(x, [1, 1, 1, factor, 1, factor])
+            x = tf.reshape(x, [-1, s[1], s[2] * factor, s[3] * factor])
     return x, labels
 
 #----------------------------------------------------------------------------
@@ -154,6 +154,7 @@ import functools
 from tensorflow.python.platform import gfile
 
 def get_input_fn(load_training_set, num_cores, mirror_augment, drange_net):
+
     self = training_set = load_training_set(batch_size=0)
 
     def input_fn(params):
@@ -166,9 +167,12 @@ def get_input_fn(load_training_set, num_cores, mirror_augment, drange_net):
         resolution = training_set.shape[1]
         resolution_log2 = int(np.log2(resolution))
         label_size = training_set.label_size
-        assert gfile.IsDirectory(training_set.tfrecord_dir)
-        tfr_files = sorted(tf.io.gfile.glob(os.path.join(training_set.tfrecord_dir, '*-r%02d.tfrecords' % resolution_log2)))
-        assert len(tfr_files) == 1
+
+        def get_tfrecord_files(tfrecord_dir):
+            assert gfile.IsDirectory(tfrecord_dir)
+            tfr_files = sorted(tf.io.gfile.glob(os.path.join(tfrecord_dir, '*-r%02d.tfrecords' % resolution_log2)))
+            assert len(tfr_files) == 1
+            return tfr_files
 
         lod_index = -1
         for tfr_file, tfr_shape, tfr_lod in training_set.tfr:
@@ -205,18 +209,39 @@ def get_input_fn(load_training_set, num_cores, mirror_augment, drange_net):
         elif True:
             #dset = training_set._tf_datasets[0]
             #dset = tf.data.TFRecordDataset(tfr_file, compression_type='', buffer_size=buffer_mb << 20)
-            dset = tf.data.Dataset.from_tensor_slices(tfr_files)
-            dset = dset.apply(tf.data.experimental.parallel_interleave(tf.data.TFRecordDataset, cycle_length=4, sloppy=True))
-
-            if training_set.label_file is not None:
-                training_set._tf_labels_var, training_set._tf_labels_init = tflib.create_var_with_large_initial_value2(training_set._np_labels, name='labels_var', trainable=False)
-                with tf.control_dependencies([training_set._tf_labels_init]):
-                    training_set._tf_labels_dataset = tf.data.Dataset.from_tensor_slices(training_set._tf_labels_var)
+            if 'context' in params:
+                current_host = params['context'].current_input_fn_deployment()[1]
+                num_hosts = params['context'].num_hosts
             else:
-                training_set._tf_labels_dataset = tf.data.Dataset.from_tensor_slices(training_set._np_labels)
+                if 'dataset_index' in params:
+                    current_host = params['dataset_index']
+                    num_hosts = params['dataset_num_shards']
+                else:
+                    current_host = 0
+                    num_hosts = 1
+            set_num_replicas(params["context"].num_replicas if "context" in params else 1)
 
-            dset = dset.map(dataset.TFRecordDataset.parse_tfrecord_tf_raw, num_parallel_calls=2)
-            dset = tf.data.Dataset.zip((dset, training_set._tf_labels_dataset))
+            def load_stylegan_tfrecord(tfr_files, to_float=False, raw=True):
+                dset = tf.data.Dataset.from_tensor_slices(tfr_files)
+                dset = dset.apply(tf.data.experimental.parallel_interleave(tf.data.TFRecordDataset, cycle_length=4, sloppy=True))
+
+                if training_set.label_file is not None:
+                    training_set._tf_labels_var, training_set._tf_labels_init = tflib.create_var_with_large_initial_value2(training_set._np_labels, name='labels_var', trainable=False)
+                    with tf.control_dependencies([training_set._tf_labels_init]):
+                        training_set._tf_labels_dataset = tf.data.Dataset.from_tensor_slices(training_set._tf_labels_var)
+                else:
+                    training_set._tf_labels_dataset = tf.data.Dataset.from_tensor_slices(training_set._np_labels)
+                if raw:
+                    dset = dset.map(dataset.TFRecordDataset.parse_tfrecord_tf_raw, num_parallel_calls=2)
+                elif to_float:
+                    dset = dset.map(dataset.TFRecordDataset.parse_tfrecord_tf_float, num_parallel_calls=2)
+                else:
+                    dset = dset.map(dataset.TFRecordDataset.parse_tfrecord_tf, num_parallel_calls=2)
+                dset = tf.data.Dataset.zip((dset, training_set._tf_labels_dataset))
+                return dset
+
+            tfr_files = get_tfrecord_files(training_set.tfrecord_dir)
+            dset = load_stylegan_tfrecord(tfr_files)
 
             shuffle_mb = 4096  # Shuffle data within specified window (megabytes), 0 = disable shuffling.
             prefetch_mb = 2048  # Amount of data to prefetch (megabytes), 0 = disable prefetching.
@@ -320,14 +345,9 @@ def training_loop(
     if resume_time <= 0.0 and 'RESUME_TIME' in os.environ:
         resume_time = float(os.environ['RESUME_TIME'])
 
-    # Initialize dnnlib and TensorFlow.
-    #tflib.init_tf(tf_config)
     num_gpus = dnnlib.submit_config.num_gpus
 
     # Load training set.
-    #training_set = dataset.load_dataset(data_dir=dnnlib.convert_path(data_dir), verbose=True, **dataset_args)
-    #import pdb; pdb.set_trace()
-    #dset, input_fn = get_input_fn(training_set, num_gpus*32)
     def load_training_set(**kws):
         return dataset.load_dataset(data_dir=dnnlib.convert_path(data_dir), verbose=True, **dataset_args, **kws)
     input_fn, training_set = get_input_fn(load_training_set, num_gpus, mirror_augment=mirror_augment, drange_net=drange_net)
@@ -361,10 +381,6 @@ def training_loop(
                                                           labels=labels_read, **D_loss_args)
 
         # Register gradients.
-        #G_reg_interval = tf.constant(G_reg_interval, tf.int64)
-        #D_reg_interval = tf.constant(D_reg_interval, tf.int64)
-        #zero = tf.constant(0, tf.int64)
-        #one = tf.constant(1, tf.int64)
         G_reg_opt = tflib.Optimizer(name='RegG', share=G_opt, cross_shard=True, learning_rate=sched_args['G_lrate_base'], **G_opt_args)
         D_reg_opt = tflib.Optimizer(name='RegD', share=D_opt, cross_shard=True, learning_rate=sched_args['D_lrate_base'], **D_opt_args)
         if not lazy_regularization:
@@ -411,16 +427,11 @@ def training_loop(
                 def D_else():
                     with tf.control_dependencies([tf.train.get_or_create_global_step()]):
                         return tf.no_op()
-                #G_reg_train_op = tf.cond(lambda: tf.equal(tf.cast(tf.mod(tf.cast(tf.train.get_or_create_global_step(), tf.int32), tf.cast(G_reg_interval, tf.int32)), tf.int32), tf.constant(0, tf.int32)), G_fn, G_else)
-                #D_reg_train_op = tf.cond(lambda: tf.equal(tf.cast(tf.mod(tf.cast(tf.train.get_or_create_global_step(), tf.int32), tf.cast(D_reg_interval, tf.int32)), tf.int32), tf.constant(0, tf.int32)), D_fn, D_else)
                 G_reg_train_op = tf.cond(lambda: tf.equal(tf.mod(tf.train.get_or_create_global_step(), G_reg_interval), tf.constant(0, tf.int64)), G_fn, G_else)
                 D_reg_train_op = tf.cond(lambda: tf.equal(tf.mod(tf.train.get_or_create_global_step(), D_reg_interval), tf.constant(0, tf.int64)), D_fn, D_else)
         else:
             G_reg_train_op = G_reg_opt._shared_optimizers[''].minimize(G_reg_loss, var_list=G_gpu.trainables) if G_reg_loss is not None else tf.no_op()
             D_reg_train_op = D_reg_opt._shared_optimizers[''].minimize(D_reg_loss, var_list=D_gpu.trainables) if D_reg_loss is not None else tf.no_op()
-
-        #run_G_reg = (lazy_regularization and running_mb_counter % G_reg_interval == 0)
-        #run_D_reg = (lazy_regularization and running_mb_counter % D_reg_interval == 0)
 
         minibatch_size_in = batch_size
         Gs_beta              = 0.5 ** tf.div(tf.cast(minibatch_size_in, tf.float32), G_smoothing_kimg * 1000.0) if G_smoothing_kimg > 0.0 else 0.0
@@ -433,16 +444,13 @@ def training_loop(
                 with tf.control_dependencies([G_reg_train_op]):
                     with tf.control_dependencies([D_train_op]):
                         with tf.control_dependencies([D_reg_train_op]):
-                            train_op = tf.group(Gs_update_op, name='train_op')
-        #import pdb; pdb.set_trace()
-
-        #train_op = G_opt.minimize(G_loss, global_step=tf.train.get_or_create_global_step())
+                            with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
+                                train_op = tf.group(Gs_update_op, name='train_op')
         return tf.contrib.tpu.TPUEstimatorSpec(
             mode=mode,
+            host_call = get_tpu_summary().get_host_call(),
             loss=loss,
             train_op=train_op)
-
-        #import pdb; pdb.set_trace()
 
     use_tpu = True
     training_steps = 2048*20480
@@ -452,20 +460,38 @@ def training_loop(
     #if tf.gfile.Exists(model_dir):
     #  tf.gfile.DeleteRecursively(model_dir)
     tpu_cluster_resolver = tflex.get_tpu_resolver()
+    spatial_partition_factor = max(1, int(os.environ.get('SPATIAL_PARTITION_FACTOR', '1')))
+    assert batch_size % (spatial_partition_factor * spatial_partition_factor) == 0
+    batch_size //= spatial_partition_factor * spatial_partition_factor
+    experimental_host_call_every_n_steps = int(os.environ.get('HOST_CALL_EVERY_N_STEPS', '64'))
+    iterations_per_loop = int(os.environ.get('ITERATIONS_PER_LOOP', '256'))
+    if spatial_partition_factor <= 1:
+        tpu_config = tf.contrib.tpu.TPUConfig(
+            iterations_per_loop=iterations_per_loop,
+            experimental_host_call_every_n_steps=experimental_host_call_every_n_steps)
+
+    else:
+        # https://cloud.google.com/tpu/docs/spatial-partitioning
+        from tensorflow.python.tpu.tpu_config import InputPipelineConfig
+        tpu_config = tf.contrib.tpu.TPUConfig(
+            iterations_per_loop=iterations_per_loop,
+            experimental_host_call_every_n_steps=experimental_host_call_every_n_steps,
+            per_host_input_for_training=InputPipelineConfig.PER_HOST_V2,
+            num_cores_per_replica=spatial_partition_factor * spatial_partition_factor,
+            input_partition_dims=[[1, 1, spatial_partition_factor, spatial_partition_factor], None])
     run_config = tf.contrib.tpu.RunConfig(
         model_dir=model_dir,
         #save_checkpoints_steps=100,
         save_checkpoints_secs=600//5,
         keep_checkpoint_max=10,
-        keep_checkpoint_every_n_hours=2,
+        keep_checkpoint_every_n_hours=1,
         cluster=tpu_cluster_resolver,
-        tpu_config=tf.contrib.tpu.TPUConfig(iterations_per_loop=256))
+        tpu_config=tpu_config)
     estimator = tf.contrib.tpu.TPUEstimator(
         config=run_config,
         use_tpu=use_tpu,
         model_fn=model_fn,
         train_batch_size=batch_size)
-    #import pdb; pdb.set_trace()
     print('Training...')
     estimator.train(input_fn, steps=training_steps)
     import pdb; pdb.set_trace()

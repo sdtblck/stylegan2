@@ -54,6 +54,14 @@ def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, m
     train.image_snapshot_ticks = train.network_snapshot_ticks = 10
     sched.G_lrate_base = float(os.environ['G_LR']) if 'G_LR' in os.environ else 0.002
     sched.D_lrate_base = float(os.environ['D_LR']) if 'D_LR' in os.environ else 0.002
+    sched.G_lrate_base *= float(os.environ['G_LR_MULT']) if 'G_LR_MULT' in os.environ else 1.0
+    sched.D_lrate_base *= float(os.environ['D_LR_MULT']) if 'D_LR_MULT' in os.environ else 1.0
+    G_opt.beta2 = float(os.environ['G_BETA2']) if 'G_BETA2' in os.environ else 0.99
+    D_opt.beta2 = float(os.environ['D_BETA2']) if 'D_BETA2' in os.environ else 0.99
+    print('G_lrate: %f' % sched.G_lrate_base)
+    print('D_lrate: %f' % sched.D_lrate_base)
+    print('G_beta2: %f' % G_opt.beta2)
+    print('D_beta2: %f' % D_opt.beta2)
     sched.minibatch_size_base = int(os.environ['BATCH_SIZE']) if 'BATCH_SIZE' in os.environ else num_gpus
     sched.minibatch_gpu_base = int(os.environ['BATCH_PER']) if 'BATCH_PER' in os.environ else 1
     D_loss.gamma = 10
@@ -61,7 +69,8 @@ def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, m
     desc = 'stylegan2'
 
     desc += '-' + dataset
-    dataset_args = EasyDict(tfrecord_dir=dataset, resolution=int(os.environ['RESOLUTION']) if 'RESOLUTION' in os.environ else 64)
+    resolution = int(os.environ['RESOLUTION']) if 'RESOLUTION' in os.environ else 64
+    dataset_args = EasyDict(tfrecord_dir=dataset, resolution=resolution)
 
     assert num_gpus in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
     sc.num_gpus = num_gpus
@@ -73,6 +82,14 @@ def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, m
     # Configs A-E: Shrink networks to match original StyleGAN.
     if config_id != 'config-f':
         G.fmap_base = D.fmap_base = 8 << 10
+
+    if 'FMAP_BASE' in os.environ:
+      G.fmap_base = D.fmap_base = int(os.environ['FMAP_BASE']) << 10
+    else:
+      G.fmap_base = D.fmap_base = 16 << 10 # default
+
+    print('G_fmap_base: %d' % G.fmap_base)
+    print('D_fmap_base: %d' % D.fmap_base)
 
     # Config E: Set gamma to 100 and override G & D architecture.
     if config_id.startswith('config-e'):
