@@ -9,7 +9,6 @@
 import os
 import re
 import tflex
-import glob
 import numpy as np
 import tensorflow as tf
 import dnnlib
