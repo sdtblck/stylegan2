@@ -117,7 +117,7 @@ class TFRecordExporter:
           tfr_writer.write(ex.SerializeToString())
       self.cur_images += 1
         
-    def add_image(self, img):
+    def add_image(self, img, single_lod=False):
         if self.print_progress and self.cur_images % self.progress_interval == 0:
             print('%d / %d\r' % (self.cur_images, self.expected_images), end='', flush=True)
         if self.shape is None:
@@ -127,9 +127,12 @@ class TFRecordExporter:
             assert self.shape[1] == self.shape[2]
             assert self.shape[1] == 2**self.res_log2
             tfr_opt = tf.python_io.TFRecordOptions(tf.python_io.TFRecordCompressionType.NONE)
-            for lod in range(self.res_log2 - 1):
-                tfr_file = self.tfr_prefix + '-r%02d.tfrecords' % (self.res_log2 - lod)
-                self.tfr_writers.append(tf.python_io.TFRecordWriter(tfr_file, tfr_opt))
+            if single_lod:
+                self.create_tfr_writer()
+            else:
+                for lod in range(self.res_log2 - 1):
+                    tfr_file = self.tfr_prefix + '-r%02d.tfrecords' % (self.res_log2 - lod)
+                    self.tfr_writers.append(tf.python_io.TFRecordWriter(tfr_file, tfr_opt))
         assert img.shape == self.shape
         for lod, tfr_writer in enumerate(self.tfr_writers):
             if lod:
@@ -554,7 +557,22 @@ def create_celeba(tfrecord_dir, celeba_dir, cx=89, cy=121):
 
 #----------------------------------------------------------------------------
 
-def create_from_images(tfrecord_dir, image_dir, shuffle):
+def create_from_hdf5(tfrecord_dir, hdf5_filename, shuffle):
+    print('Loading HDF5 archive from "%s"' % hdf5_filename)
+    import h5py # conda install h5py
+    with h5py.File(hdf5_filename, 'r') as hdf5_file:
+        hdf5_data = max([value for key, value in hdf5_file.items() if key.startswith('data')], key=lambda lod: lod.shape[3])
+        with TFRecordExporter(tfrecord_dir, hdf5_data.shape[0]) as tfr:
+            order = tfr.choose_shuffled_order() if shuffle else np.arange(hdf5_data.shape[0])
+            for idx in range(order.size):
+                tfr.add_image(hdf5_data[order[idx]])
+            npy_filename = os.path.splitext(hdf5_filename)[0] + '-labels.npy'
+            if os.path.isfile(npy_filename):
+                tfr.add_labels(np.load(npy_filename)[order])
+
+#----------------------------------------------------------------------------
+
+def create_from_images(tfrecord_dir, image_dir, shuffle, single_lod=True):
     print('Loading images from "%s"' % image_dir)
     image_filenames = sorted(glob.glob(os.path.join(image_dir, '*')))
     if len(image_filenames) == 0:
@@ -578,22 +596,7 @@ def create_from_images(tfrecord_dir, image_dir, shuffle):
                 img = img[np.newaxis, :, :] # HW => CHW
             else:
                 img = img.transpose([2, 0, 1]) # HWC => CHW
-            tfr.add_image(img)
-
-#----------------------------------------------------------------------------
-
-def create_from_hdf5(tfrecord_dir, hdf5_filename, shuffle):
-    print('Loading HDF5 archive from "%s"' % hdf5_filename)
-    import h5py # conda install h5py
-    with h5py.File(hdf5_filename, 'r') as hdf5_file:
-        hdf5_data = max([value for key, value in hdf5_file.items() if key.startswith('data')], key=lambda lod: lod.shape[3])
-        with TFRecordExporter(tfrecord_dir, hdf5_data.shape[0]) as tfr:
-            order = tfr.choose_shuffled_order() if shuffle else np.arange(hdf5_data.shape[0])
-            for idx in range(order.size):
-                tfr.add_image(hdf5_data[order[idx]])
-            npy_filename = os.path.splitext(hdf5_filename)[0] + '-labels.npy'
-            if os.path.isfile(npy_filename):
-                tfr.add_labels(np.load(npy_filename)[order])
+            tfr.add_image(img, single_lod=single_lod)
 
 #----------------------------------------------------------------------------
 
@@ -723,6 +726,8 @@ def execute_cmdline(argv):
     p.add_argument(     'tfrecord_dir',     help='New dataset directory to be created')
     p.add_argument(     'image_dir',        help='Directory containing the images')
     p.add_argument(     '--shuffle',        help='Randomize image order (default: 1)', type=int, default=1)
+    p.add_argument(     '--single_lod',        help='Only create a tfr file at a single level of detail (default: 1)', type=int, default=1)
+
     
     p = add_command(
         "create_from_images_raw",
