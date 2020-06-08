@@ -594,6 +594,8 @@ def create_from_images(tfrecord_dir, image_dir, shuffle, single_lod=True):
     with TFRecordExporter(tfrecord_dir, len(image_filenames)) as tfr:
         order = tfr.choose_shuffled_order() if shuffle else np.arange(len(image_filenames))
         for idx in range(order.size):
+            if idx % 1000 == 0:
+                print ("added images", idx)
             img = np.asarray(PIL.Image.open(image_filenames[order[idx]]))
             if channels == 1:
                 img = img[np.newaxis, :, :]  # HW => CHW
