@@ -634,22 +634,22 @@ def training_loop(
             loss=loss,
             train_op=train_op)
 
-    use_tpu = True
+        use_tpu = True
     training_steps = 2048*20480
     batch_size = sched_args.minibatch_size_base
     pprint(sched_args)
     model_dir=os.environ['MODEL_DIR'] if 'MODEL_DIR' in os.environ else 'gs://danbooru-euw4a/test/run30/'
     tpu_cluster_resolver = tflex.get_tpu_resolver()
-    spatial_partition_factor = max(1, int(os.environ.get('SPATIAL_PARTITION_FACTOR', '1')))
-    assert batch_size % (spatial_partition_factor * spatial_partition_factor) == 0
-    batch_size //= spatial_partition_factor * spatial_partition_factor
+    spatial_partition_factor_h = max(1, int(os.environ.get('SPATIAL_PARTITION_FACTOR_H', '1')))
+    spatial_partition_factor_w = max(1, int(os.environ.get('SPATIAL_PARTITION_FACTOR_W', '1')))
+    assert batch_size % (spatial_partition_factor_h * spatial_partition_factor_w) == 0
+    batch_size //= spatial_partition_factor_h * spatial_partition_factor_w
     experimental_host_call_every_n_steps = int(os.environ.get('HOST_CALL_EVERY_N_STEPS', '64'))
     iterations_per_loop = int(os.environ.get('ITERATIONS_PER_LOOP', '256'))
-    if spatial_partition_factor <= 1:
+    if spatial_partition_factor_h * spatial_partition_factor_w <= 1:
         tpu_config = tf.contrib.tpu.TPUConfig(
             iterations_per_loop=iterations_per_loop,
             experimental_host_call_every_n_steps=experimental_host_call_every_n_steps)
-
     else:
         # https://cloud.google.com/tpu/docs/spatial-partitioning
         from tensorflow.python.tpu.tpu_config import InputPipelineConfig
@@ -657,8 +657,8 @@ def training_loop(
             iterations_per_loop=iterations_per_loop,
             experimental_host_call_every_n_steps=experimental_host_call_every_n_steps,
             per_host_input_for_training=InputPipelineConfig.PER_HOST_V2,
-            num_cores_per_replica=spatial_partition_factor * spatial_partition_factor,
-            input_partition_dims=[[1, 1, spatial_partition_factor, spatial_partition_factor], None])
+            num_cores_per_replica=spatial_partition_factor_h * spatial_partition_factor_w,
+            input_partition_dims=[[1, 1, spatial_partition_factor_h, spatial_partition_factor_w], None])
     run_config = tf.contrib.tpu.RunConfig(
         model_dir=model_dir,
         #save_checkpoints_steps=100,
