@@ -634,7 +634,7 @@ def training_loop(
             loss=loss,
             train_op=train_op)
 
-        use_tpu = True
+    use_tpu = True
     training_steps = 2048*20480
     batch_size = sched_args.minibatch_size_base
     pprint(sched_args)
