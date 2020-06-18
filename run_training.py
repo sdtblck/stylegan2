@@ -35,7 +35,7 @@ _valid_configs = [
 
 #----------------------------------------------------------------------------
 
-def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, mirror_augment, metrics):
+def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, mirror_augment, spatial_augmentations, metrics):
     train     = EasyDict(run_func_name='training.training_loop.training_loop') # Options for training loop.
     G         = EasyDict(func_name='training.networks_stylegan2.G_main')       # Options for generator network.
     D         = EasyDict(func_name='training.networks_stylegan2.D_stylegan2')  # Options for discriminator network.
@@ -51,6 +51,11 @@ def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, m
     train.data_dir = data_dir
     train.total_kimg = total_kimg
     train.mirror_augment = mirror_augment
+    train.spatial_augmentations = spatial_augmentations
+    if spatial_augmentations:
+      os.environ['SPATIAL_AUGS'] = "1"
+    else:
+      os.environ['SPATIAL_AUGS'] = "0"
     train.image_snapshot_ticks = train.network_snapshot_ticks = 10
     sched.G_lrate_base = float(os.environ['G_LR']) if 'G_LR' in os.environ else 0.002
     sched.D_lrate_base = float(os.environ['D_LR']) if 'D_LR' in os.environ else 0.002
@@ -187,6 +192,7 @@ def main():
     parser.add_argument('--total-kimg', help='Training length in thousands of images (default: %(default)s)', metavar='KIMG', default=25000, type=int)
     parser.add_argument('--gamma', help='R1 regularization weight (default is config dependent)', default=None, type=float)
     parser.add_argument('--mirror-augment', help='Mirror augment (default: %(default)s)', default=False, metavar='BOOL', type=_str_to_bool)
+    parser.add_argument('--spatial-augmentations', help='Add random spatial augmentations from Zhao et al 2020b (default: %(default)s)', default=False, metavar='BOOL', type=_str_to_bool)
     parser.add_argument('--metrics', help='Comma-separated list of metrics or "none" (default: %(default)s)', default='fid50k', type=_parse_comma_sep)
 
     args = parser.parse_args()
