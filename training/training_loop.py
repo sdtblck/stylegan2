@@ -22,9 +22,6 @@ from metrics import metric_base
 from pprint import pprint
 
 
-#TODO: image summaries
-save_image_summaries = int(os.environ.get('SPATIAL_AUGS_IMAGE_SUMMARIES', '0'))
-
 #----------------------------------------------------------------------------
 # Just-in-time processing of training images before feeding them to the networks.
 
@@ -35,16 +32,6 @@ def process_reals(x, labels, lod, mirror_augment, spatial_augmentations, drange_
     if mirror_augment:
         with tf.name_scope('MirrorAugment'):
             x = tf.where(tf.random_uniform([tf.shape(x)[0]]) < 0.5, x, tf.reverse(x, [3]))
-    if spatial_augmentations:
-        with tf.name_scope('SpatialAugmentations'):
-            pre = tf.transpose(x, [0, 2, 3, 1])
-            post = tf.map_fn(misc.apply_random_aug, pre)
-            x = tf.transpose(post, [0, 3, 1, 2])
-        # TODO: change to autoimages
-        # if save_image_summaries:
-        #     with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
-        #         tf.summary.image("reals_pre-augment", pre)
-        #         tf.summary.image("reals_post-augment", post)
     assert lod == 0.0
     if False:
         with tf.name_scope('FadeLOD'): # Smooth crossfade between consecutive levels-of-detail.
