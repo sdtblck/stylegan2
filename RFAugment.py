@@ -39,7 +39,7 @@ def augment(batch, policy='', channels_first=True, mode='gpu'):
                     for f in BATCH_AUGMENT_FNS_TPU[p]:
                         print('Entering Batch Augmentations')
                         batch = f(batch)
-                elif p in SINGLE_IMG_FNS:
+                elif p in SINGLE_IMG_FNS_TPU:
                     for f in SINGLE_IMG_FNS_TPU[p]:
                         print('Entering Single Augmentations')
                         batch = tf.map_fn(f, batch)
