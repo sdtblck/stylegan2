@@ -50,7 +50,6 @@ def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, m
     train.total_kimg = total_kimg
     train.mirror_augment = mirror_augment
     train.mirror_augment_v = mirror_augment_v
-    train.augmentations = augmentations
     if augmentations:
       os.environ['AUGS'] = "1"
     else:
