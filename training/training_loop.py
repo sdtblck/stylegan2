@@ -18,12 +18,10 @@ from training import misc
 from metrics import metric_base
 import os
 
-save_image_summaries = int(os.environ.get('SPATIAL_AUGS_IMAGE_SUMMARIES', '0'))
-
 #----------------------------------------------------------------------------
 # Just-in-time processing of training images before feeding them to the networks.
 
-def process_reals(x, labels, lod, mirror_augment, mirror_augment_v, spatial_augmentations, drange_data, drange_net):
+def process_reals(x, labels, lod, mirror_augment, mirror_augment_v, drange_data, drange_net):
     with tf.name_scope('DynamicRange'):
         x = tf.cast(x, tf.float32)
         x = misc.adjust_dynamic_range(x, drange_data, drange_net)
@@ -33,15 +31,6 @@ def process_reals(x, labels, lod, mirror_augment, mirror_augment_v, spatial_augm
     if mirror_augment_v:
         with tf.name_scope('MirrorAugment_V'):
             x = tf.where(tf.random_uniform([tf.shape(x)[0]]) < 0.5, x, tf.reverse(x, [2]))
-    if spatial_augmentations:
-        with tf.name_scope('SpatialAugmentations'):
-            pre = tf.transpose(x, [0, 2, 3, 1])
-            post = tf.map_fn(misc.apply_random_aug, pre)
-            x = tf.transpose(post, [0, 3, 1, 2])
-        if save_image_summaries:
-            with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
-                tf.summary.image("reals_pre-augment", pre)
-                tf.summary.image("reals_post-augment", post)
     with tf.name_scope('FadeLOD'): # Smooth crossfade between consecutive levels-of-detail.
         s = tf.shape(x)
         y = tf.reshape(x, [-1, s[1], s[2]//2, 2, s[3]//2, 2])
@@ -250,7 +239,7 @@ def training_loop(
                 reals_var = tf.Variable(name='reals', trainable=False, initial_value=tf.zeros([sched.minibatch_gpu] + training_set.shape))
                 labels_var = tf.Variable(name='labels', trainable=False, initial_value=tf.zeros([sched.minibatch_gpu, training_set.label_size]))
                 reals_write, labels_write = training_set.get_minibatch_tf()
-                reals_write, labels_write = process_reals(reals_write, labels_write, lod_in, mirror_augment, mirror_augment_v, spatial_augmentations, training_set.dynamic_range, drange_net)
+                reals_write, labels_write = process_reals(reals_write, labels_write, lod_in, mirror_augment, mirror_augment_v, training_set.dynamic_range, drange_net)
                 reals_write = tf.concat([reals_write, reals_var[minibatch_gpu_in:]], axis=0)
                 labels_write = tf.concat([labels_write, labels_var[minibatch_gpu_in:]], axis=0)
                 data_fetch_ops += [tf.assign(reals_var, reals_write)]
@@ -301,18 +290,6 @@ def training_loop(
     if save_weight_histograms:
         G.setup_weight_histograms(); D.setup_weight_histograms()
     metrics = metric_base.MetricGroup(metric_arg_list)
-
-    if spatial_augmentations:
-        print('Augmenting fakes and reals')
-        alpha_override = float(os.environ.get('SPATIAL_AUGS_ALPHA', '0'))
-        if alpha_override == 0.0:
-          print('Augmentation alpha at default setting of 0.1 - change by setting SPATIAL_AUGS_ALPHA environment variable')
-        else:
-          if alpha_override >= 1:
-            alpha_override = 0.999
-          print(f'Augmentation alpha set to {alpha_override}')
-        if save_image_summaries:
-          print('Saving image summaries to tensorboard')
     print('Training for %d kimg...\n' % total_kimg)
 
 
