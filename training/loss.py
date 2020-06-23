@@ -11,11 +11,20 @@ import tensorflow as tf
 import dnnlib.tflib as tflib
 from dnnlib.tflib.autosummary import autosummary, autoimages
 from training import misc
+import os
 import RFAugment
 
 #----------------------------------------------------------------------------
 # Logistic loss from the paper
 # "Generative Adversarial Nets", Goodfellow et al. 2014
+
+augmentations = int(os.environ.get('AUGS', '0'))
+if augmentations:
+  augment = True
+else:
+  augment = False
+augmentation_policy = os.environ.get('AUG_POLICY', 'random')
+save_image_summaries = int(os.environ.get('AUGS_IMAGE_SUMMARIES', '0'))
 
 
 def G_logistic(G, D, opt, training_set, minibatch_size):
@@ -23,6 +32,8 @@ def G_logistic(G, D, opt, training_set, minibatch_size):
     latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])
     labels = training_set.get_random_labels_tf(minibatch_size)
     fake_images_out = G.get_output_for(latents, labels, is_training=True)
+    if augment:
+        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, channels_first=True, mode='tpu')
     fake_scores_out = D.get_output_for(fake_images_out, labels, is_training=True)
     loss = -tf.nn.softplus(fake_scores_out) # log(1-sigmoid(fake_scores_out)) # pylint: disable=invalid-unary-operand-type
     autosummary('G_logistic_00/total_loss', loss)
@@ -66,14 +77,14 @@ def D_logistic(G, D, opt, training_set, minibatch_size, reals, labels):
 # "Which Training Methods for GANs do actually Converge?", Mescheder et al. 2018
 
 def D_logistic_r1(G, D, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
-
-    reals = RFAugment.augment(reals, policy='random', channels_first=True, mode='tpu')
+    if augment:
+        reals = RFAugment.augment(reals, policy=augmentation_policy, channels_first=True, mode='tpu')
 
     _ = opt, training_set
     latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])
     fake_images_out = G.get_output_for(latents, labels, is_training=True)
-
-    fake_images_out = RFAugment.augment(fake_images_out, policy='random', channels_first=True, mode='tpu')
+    if augment:
+        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, channels_first=True, mode='tpu')
 
     # TODO: summaries
     # if save_image_summaries:
@@ -209,7 +220,8 @@ def G_logistic_ns_pathreg(G, D, opt, training_set, minibatch_size, pl_minibatch_
     latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])
     labels = training_set.get_random_labels_tf(minibatch_size)
     fake_images_out, fake_dlatents_out = G.get_output_for(latents, labels, is_training=True, return_dlatents=True)
-    fake_images_out = RFAugment.augment(fake_images_out, policy='random', channels_first=True, mode='tpu')
+    if augment:
+        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, channels_first=True, mode='tpu')
     # TODO: summaries
     # if save_image_summaries:
     #     autoimages('G_logistic_ns_pathreg/images/fake_pre_augment', fake_images_out_pre_augment)

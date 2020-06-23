@@ -12,36 +12,39 @@ import os
 
 def augment(batch, policy='', channels_first=True, mode='gpu'):
     if mode == 'gpu':
-        if policy:
-            if channels_first:
-                batch = tf.transpose(batch, [0, 2, 3, 1])
-            for p in policy.split(','):
-                p = p.replace(" ", "")
-                if p in BATCH_AUGMENT_FNS:
-                    for f in BATCH_AUGMENT_FNS[p]:
-                        batch = f(batch)
-                elif p in SINGLE_IMG_FNS:
-                    for f in SINGLE_IMG_FNS[p]:
-                        batch = tf.map_fn(f, batch)
-            if channels_first:
-                batch = tf.transpose(batch, [0, 3, 1, 2])
-        return batch
-    elif mode == 'tpu':
-        print('Entering TPU mode of augmentation code')
+        print('Augmenting reals and fake in gpu mode')
         if policy:
             if channels_first:
                 print('Transposing channels')
                 batch = tf.transpose(batch, [0, 2, 3, 1])
             for p in policy.split(','):
-                print('POLICY : ', p)
+                p = p.replace(" ", "")
+                if p in BATCH_AUGMENT_FNS:
+                    for f in BATCH_AUGMENT_FNS[p]:
+                        print('POLICY : ', p)
+                        batch = f(batch)
+                elif p in SINGLE_IMG_FNS:
+                    for f in SINGLE_IMG_FNS[p]:
+                        print('POLICY : ', p)
+                        batch = tf.map_fn(f, batch)
+            if channels_first:
+                batch = tf.transpose(batch, [0, 3, 1, 2])
+        return batch
+    elif mode == 'tpu':
+        print('Augmenting reals and fake in tpu mode')
+        if policy:
+            if channels_first:
+                print('Transposing channels')
+                batch = tf.transpose(batch, [0, 2, 3, 1])
+            for p in policy.split(','):
                 p = p.replace(" ", "")
                 if p in BATCH_AUGMENT_FNS_TPU:
                     for f in BATCH_AUGMENT_FNS_TPU[p]:
-                        print('Entering Batch Augmentations')
+                        print('POLICY : ', p)
                         batch = f(batch)
-                elif p in SINGLE_IMG_FNS_TPU:
+                elif p in SINGLE_IMG_FNS:
                     for f in SINGLE_IMG_FNS_TPU[p]:
-                        print('Entering Single Augmentations')
+                        print('POLICY : ', p)
                         batch = tf.map_fn(f, batch)
             if channels_first:
                 batch = tf.transpose(batch, [0, 3, 1, 2])
@@ -55,10 +58,12 @@ colour_alpha_override = float(os.environ.get('COLOUR_AUGS_ALPHA', '0'))
 if alpha_override > 0:
     if alpha_override >= 1:
         alpha_override = 0.999
+    print(f'Overrinding default alpha setting - setting to {alpha_override}')
     alpha_default = alpha_override
 if colour_alpha_override > 0:
     if colour_alpha_override >= 1:
         colour_alpha_override = 0.999
+    print(f'Overrinding default colour alpha setting - setting to {colour_alpha_override}')
     colour_alpha_default = colour_alpha_override
 
 # ----------------------------------------------------------------------------
@@ -132,12 +137,15 @@ def rand_cutout(x, ratio=[1, 2]):
     x = x * tf.expand_dims(mask, axis=3)
     return x
 
+def random_mirror(x):
+    return tf.image.random_flip_left_right(x)
 
 BATCH_AUGMENT_FNS = {
     'color': [rand_brightness, rand_color, rand_contrast],
     'colour': [rand_brightness, rand_color, rand_contrast], # American spelling is a crime
     'translation': [rand_translation],
     'cutout': [rand_cutout],
+    'mirror': [random_mirror]
 }
 
 BATCH_AUGMENT_FNS_TPU = {
@@ -448,6 +456,7 @@ SINGLE_IMG_FNS = {
     'xtrans': [X_translate],
     'ytrans': [Y_translate],
     'xytrans': [XY_translate],
+    'randomcutout': [random_cutout],
     'random': [apply_random_aug]
 }
 
@@ -825,36 +834,25 @@ def cut_in_half(img, horizontal=False, left=True, top=True, quarter=True):
   if horizontal:
     if top:
       if quarter:
-        val = tf.cast((h//4), dtype=tf.int32)
-        return tf.slice(img, [0, 0, 0], [val, w, c])
+        return tf.slice(img, [0, 0, 0], [(h//4), w, c])
       else:
-        val = tf.cast(h//2, dtype=tf.int32)
-        return tf.slice(img, [0, 0, 0], [val, w, c])
+        return tf.slice(img, [0, 0, 0], [(h//2), w, c])
     else:
       if quarter:
-        val = tf.cast((h//4)*3, dtype=tf.int32)
-        val2 = tf.cast((h//4), dtype=tf.int32)
-        return tf.slice(img, [val, 0, 0], [val2, w, c])
+        return tf.slice(img, [((h//4)*3), 0, 0], [(h//4), w, c])
       else:
-        val = tf.cast(h//2, dtype=tf.int32)
-        return tf.slice(img, [val, 0, 0], [val, w, c])
+        return tf.slice(img, [(h//2), 0, 0], [(h//2), w, c])
   else:
     if left:
       if quarter:
-        val = tf.cast((w//4), dtype=tf.int32)
-
-        return tf.slice(img, [0, 0, 0], [h, val, c])
+        return tf.slice(img, [0, 0, 0], [h, (w//4), c])
       else:
-        val = tf.cast((w//4), dtype=tf.int32)
-        return tf.slice(img, [0, 0, 0], [h, val, c])
+        return tf.slice(img, [0, 0, 0], [h, (w//4), c])
     else:
       if quarter:
-        val = tf.cast((w//4)*3, dtype=tf.int32)
-        val2 = tf.cast((w//4), dtype=tf.int32)
-        return tf.slice(img, [0, val, 0], [h, val2, c])
+        return tf.slice(img, [0, ((w//4)*3), 0], [h, (w//4), c])
       else:
-        val = tf.cast(h//2, dtype=tf.int32)
-        return tf.slice(img, [0, val, 0], [h, val, c])
+        return tf.slice(img, [0, (w//2), 0], [h, (w//2), c])
 
 
 def grid_pad(img, x=False, half=False, quarter=True):
@@ -878,13 +876,14 @@ def grid_pad(img, x=False, half=False, quarter=True):
       return tf.concat(values=[img_flipped_ud, img, img_flipped_ud], axis=0)
 
 def mirror_pad_custom(img, quarter=True):
-  gp = grid_pad(img, x=True, quarter=quarter)
-  return grid_pad(gp, x=False, quarter=quarter)
+  gp = grid_pad(img, x=True, quarter=True)
+  return grid_pad(gp, x=False, quarter=True)
 
 def xy_translate_custom(img, y, x, out_shape=None):
   if out_shape is None:
     out_shape = img.shape
   padded_img = mirror_pad_custom(img)
+  padded_shape = padded_img.shape
   if x >= out_shape[1] - 1:
     raise Exception('X value must be < width of image - 1')
   if y >= out_shape[0] - 1:

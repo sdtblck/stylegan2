@@ -25,7 +25,7 @@ from pprint import pprint
 #----------------------------------------------------------------------------
 # Just-in-time processing of training images before feeding them to the networks.
 
-def process_reals(x, labels, lod, mirror_augment, spatial_augmentations, drange_data, drange_net):
+def process_reals(x, labels, lod, mirror_augment, drange_data, drange_net):
     with tf.name_scope('DynamicRange'):
         x = tf.cast(x, tf.float32)
         x = misc.adjust_dynamic_range(x, drange_data, drange_net)
@@ -443,7 +443,7 @@ def get_input_fn(load_training_set, num_cores, mirror_augment, drange_net):
             def dataset_parser_dynamic(features, labels):
                 #features, labels = set_shapes(batch_size, num_channels, resolution, label_size, features, labels)
                 #features, labels = set_shapes(None, num_channels, resolution, label_size, features, labels)
-                features, labels = process_reals(features, labels, lod=0.0, mirror_augment=mirror_augment, spatial_augmentations=False, drange_data=training_set.dynamic_range, drange_net=drange_net)
+                features, labels = process_reals(features, labels, lod=0.0, mirror_augment=mirror_augment, drange_data=training_set.dynamic_range, drange_net=drange_net)
                 #features = tf.cast(features, tf.float32)
                 return features, labels
 
@@ -508,7 +508,6 @@ def training_loop(
     reset_opt_for_new_lod   = True,     # Reset optimizer internal state (e.g. Adam moments) when new layers are introduced?
     total_kimg              = 25000,    # Total length of the training, measured in thousands of real images.
     mirror_augment          = False,    # Enable mirror augment?
-    spatial_augmentations   = False,  # Enable spatial augmentations from Zhao et al 2020b
     drange_net              = [-1,1],   # Dynamic range used when feeding image data to the networks.
     image_snapshot_ticks    = 50,       # How often to save image snapshots? None = only save 'reals.png' and 'fakes-init.png'.
     network_snapshot_ticks  = 50,       # How often to save network snapshots? None = only save 'networks-final.pkl'.
@@ -806,7 +805,7 @@ def training_loop(
                 reals_var = tf.Variable(name='reals', trainable=False, initial_value=tf.zeros([sched.minibatch_gpu] + training_set.shape))
                 labels_var = tf.Variable(name='labels', trainable=False, initial_value=tf.zeros([sched.minibatch_gpu, training_set.label_size]))
                 reals_write, labels_write = training_set.get_minibatch_tf()
-                reals_write, labels_write = process_reals(reals_write, labels_write, lod_in, mirror_augment, spatial_augmentations, training_set.dynamic_range, drange_net)
+                reals_write, labels_write = process_reals(reals_write, labels_write, lod_in, mirror_augment, training_set.dynamic_range, drange_net)
                 reals_write = tf.concat([reals_write, reals_var[minibatch_gpu_in:]], axis=0)
                 labels_write = tf.concat([labels_write, labels_var[minibatch_gpu_in:]], axis=0)
                 data_fetch_ops += [tf.group(tf.assign(reals_var, reals_write), name="fetch_reals")]
@@ -864,19 +863,6 @@ def training_loop(
     if save_weight_histograms:
         G.setup_weight_histograms(); D.setup_weight_histograms()
     metrics = metric_base.MetricGroup(metric_arg_list)
-
-    if spatial_augmentations:
-        print('Augmenting fakes and reals')
-        alpha_override = float(os.environ.get('SPATIAL_AUGS_ALPHA', '0'))
-        if alpha_override == 0.0:
-          print('Augmentation alpha at default setting of 0.1 - change by setting SPATIAL_AUGS_ALPHA environment variable')
-        else:
-          if alpha_override >= 1:
-            alpha_override = 0.999
-          print(f'Augmentation alpha set to {alpha_override}')
-        # TODO: image summaries
-        # if save_image_summaries:
-        #   print('Saving image summaries to tensorboard')
     print('Training for %d kimg...\n' % total_kimg)
     dnnlib.RunContext.get().update('', cur_epoch=resume_kimg, max_epoch=total_kimg)
     maintenance_time = dnnlib.RunContext.get().get_last_update_interval()

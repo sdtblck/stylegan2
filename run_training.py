@@ -35,7 +35,7 @@ _valid_configs = [
 
 #----------------------------------------------------------------------------
 
-def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, mirror_augment, spatial_augmentations, metrics):
+def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, mirror_augment, augmentations, metrics):
     train     = EasyDict(run_func_name='training.training_loop.training_loop') # Options for training loop.
     G         = EasyDict(func_name='training.networks_stylegan2.G_main')       # Options for generator network.
     D         = EasyDict(func_name='training.networks_stylegan2.D_stylegan2')  # Options for discriminator network.
@@ -51,11 +51,10 @@ def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, m
     train.data_dir = data_dir
     train.total_kimg = total_kimg
     train.mirror_augment = mirror_augment
-    train.spatial_augmentations = spatial_augmentations
-    if spatial_augmentations:
-      os.environ['SPATIAL_AUGS'] = "1"
+    if augmentations:
+      os.environ['AUGS'] = "1"
     else:
-      os.environ['SPATIAL_AUGS'] = "0"
+      os.environ['AUGS'] = "0"
     train.image_snapshot_ticks = train.network_snapshot_ticks = 10
     sched.G_lrate_base = float(os.environ['G_LR']) if 'G_LR' in os.environ else 0.002
     sched.D_lrate_base = float(os.environ['D_LR']) if 'D_LR' in os.environ else 0.002
