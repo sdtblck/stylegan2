@@ -825,25 +825,36 @@ def cut_in_half(img, horizontal=False, left=True, top=True, quarter=True):
   if horizontal:
     if top:
       if quarter:
-        return tf.slice(img, [0, 0, 0], [(h//4), w, c])
+        val = tf.cast((h//4), dtype=tf.int32)
+        return tf.slice(img, [0, 0, 0], [val, w, c])
       else:
-        return tf.slice(img, [0, 0, 0], [(h//2), w, c])
+        val = tf.cast(h//2, dtype=tf.int32)
+        return tf.slice(img, [0, 0, 0], [val, w, c])
     else:
       if quarter:
-        return tf.slice(img, [((h//4)*3), 0, 0], [(h//4), w, c])
+        val = tf.cast((h//4)*3, dtype=tf.int32)
+        val2 = tf.cast((h//4), dtype=tf.int32)
+        return tf.slice(img, [val, 0, 0], [val2, w, c])
       else:
-        return tf.slice(img, [(h//2), 0, 0], [(h//2), w, c])
+        val = tf.cast(h//2, dtype=tf.int32)
+        return tf.slice(img, [val, 0, 0], [val, w, c])
   else:
     if left:
       if quarter:
-        return tf.slice(img, [0, 0, 0], [h, (w//4), c])
+        val = tf.cast((w//4), dtype=tf.int32)
+
+        return tf.slice(img, [0, 0, 0], [h, val, c])
       else:
-        return tf.slice(img, [0, 0, 0], [h, (w//4), c])
+        val = tf.cast((w//4), dtype=tf.int32)
+        return tf.slice(img, [0, 0, 0], [h, val, c])
     else:
       if quarter:
-        return tf.slice(img, [0, ((w//4)*3), 0], [h, (w//4), c])
+        val = tf.cast((w//4)*3, dtype=tf.int32)
+        val2 = tf.cast((w//4), dtype=tf.int32)
+        return tf.slice(img, [0, val, 0], [h, val2, c])
       else:
-        return tf.slice(img, [0, (w//2), 0], [h, (w//2), c])
+        val = tf.cast(h//2, dtype=tf.int32)
+        return tf.slice(img, [0, val, 0], [h, val, c])
 
 
 def grid_pad(img, x=False, half=False, quarter=True):
@@ -867,14 +878,13 @@ def grid_pad(img, x=False, half=False, quarter=True):
       return tf.concat(values=[img_flipped_ud, img, img_flipped_ud], axis=0)
 
 def mirror_pad_custom(img, quarter=True):
-  gp = grid_pad(img, x=True, quarter=True)
-  return grid_pad(gp, x=False, quarter=True)
+  gp = grid_pad(img, x=True, quarter=quarter)
+  return grid_pad(gp, x=False, quarter=quarter)
 
 def xy_translate_custom(img, y, x, out_shape=None):
   if out_shape is None:
     out_shape = img.shape
   padded_img = mirror_pad_custom(img)
-  padded_shape = padded_img.shape
   if x >= out_shape[1] - 1:
     raise Exception('X value must be < width of image - 1')
   if y >= out_shape[0] - 1:
