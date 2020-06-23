@@ -66,6 +66,7 @@ def D_logistic(G, D, opt, training_set, minibatch_size, reals, labels):
 # "Which Training Methods for GANs do actually Converge?", Mescheder et al. 2018
 
 def D_logistic_r1(G, D, opt, training_set, minibatch_size, reals, labels, gamma=10.0):
+
     reals = RFAugment.augment(reals, policy='random', channels_first=True, mode='tpu')
 
     _ = opt, training_set
