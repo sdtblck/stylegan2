@@ -10,20 +10,6 @@
 import tensorflow as tf
 import os
 
-#
-# if augment:
-#     print('Augmenting fakes and reals')
-#     alpha_override = float(os.environ.get('SPATIAL_AUGS_ALPHA', '0'))
-#     if alpha_override == 0.0:
-#         print(
-#             'Augmentation alpha at default setting of 0.1 - change by setting SPATIAL_AUGS_ALPHA environment variable')
-#     else:
-#         if alpha_override >= 1:
-#             alpha_override = 0.999
-#         print(f'Augmentation alpha set to {alpha_override}')
-#     if save_image_summaries:
-#         print('Saving image summaries to tensorboard')
-
 
 def augment(batch, policy='', channels_first=True, mode='gpu'):
     if mode == 'gpu':
