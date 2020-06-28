@@ -13,8 +13,10 @@ import math
 import random
 
 
-def augment(batch, policy='', channels_first=True, mode='gpu'):
+def augment(batch, policy='', channels_first=True, mode='gpu', probability=None):
     batch_size = os.environ.get('BATCH_PER', '?')
+    if probability is not None:
+        probability = float(max(min(probability, 1), 0)) # clamp p to a float between 0 and 1
     if batch_size == '?':
       print('BATCH SIZE: ', batch_size)
       raise Exception('Some augmentations need a static batch size to run.\n Please set environment variable BATCH_PER to your batch size')
@@ -29,34 +31,42 @@ def augment(batch, policy='', channels_first=True, mode='gpu'):
             if channels_first:
                 print('Transposing channels')
                 batch = tf.transpose(batch, [0, 2, 3, 1])
-            for p in policy.split(','):
-                p = p.replace(" ", "")
-                if p in BATCH_AUGMENT_FNS:
-                    for f in BATCH_AUGMENT_FNS[p]:
-                        print('POLICY : ', p)
-                        batch = f(batch)
-                elif p in SINGLE_IMG_FNS:
-                    for f in SINGLE_IMG_FNS[p]:
-                        print('POLICY : ', p)
-                        batch = tf.map_fn(f, batch)
+            for pol in policy.split(','):
+                pol = pol.replace(" ", "")
+                if pol in BATCH_AUGMENT_FNS:
+                    for f in BATCH_AUGMENT_FNS[pol]:
+                        print('POLICY : ', pol)
+                        if probability is None:
+                            batch = f(batch)
+                        if probability is not None:
+                            random_apply(f, probability, batch)
+                elif pol in SINGLE_IMG_FNS:
+                    for f in SINGLE_IMG_FNS[pol]:
+                        print('POLICY : ', pol)
+                        if probability is None:
+                            batch = tf.map_fn(f, batch)
+                        else:
+                            batch = tf.map_fn(lambda inp: random_apply(inp[0], inp[1], inp[2]), (f, probability, batch))
             if channels_first:
                 batch = tf.transpose(batch, [0, 3, 1, 2])
         return batch
     elif mode == 'tpu':
         print('Augmenting reals and fake in tpu mode')
+        if probability is not None:
+            print('ERROR: Random applications may not work on tpu')
         if policy:
             if channels_first:
                 print('Transposing channels')
                 batch = tf.transpose(batch, [0, 2, 3, 1])
-            for p in policy.split(','):
-                p = p.replace(" ", "")
-                if p in BATCH_AUGMENT_FNS_TPU:
-                    for f in BATCH_AUGMENT_FNS_TPU[p]:
-                        print('POLICY : ', p)
+            for pol in policy.split(','):
+                pol = pol.replace(" ", "")
+                if pol in BATCH_AUGMENT_FNS_TPU:
+                    for f in BATCH_AUGMENT_FNS_TPU[pol]:
+                        print('POLICY : ', pol)
                         batch = f(batch)
-                elif p in SINGLE_IMG_FNS_TPU:
-                    for f in SINGLE_IMG_FNS_TPU[p]:
-                        print('POLICY : ', p)
+                elif pol in SINGLE_IMG_FNS_TPU:
+                    for f in SINGLE_IMG_FNS_TPU[pol]:
+                        print('POLICY : ', pol)
                         batch = tf.map_fn(f, batch)
             if channels_first:
                 batch = tf.transpose(batch, [0, 3, 1, 2])
@@ -123,10 +133,18 @@ def rand_contrast(x, alpha=colour_alpha_default):
     return x
 
 
-def batch_cutout(x, ratio=[1, 2]):
+def batch_cutout(x, alpha=alpha_default):
+    """
+    Vectorized / batch solution to random cutout adapted from DiffAugment
+
+    :param x: 4-D batch tensor
+    :param alpha: float, strength of augmentation.
+    :param ratio:
+    :return: 4-D batch tensor
+    """
     batch_size = tf.shape(x)[0]
     image_size = tf.shape(x)[1:3]
-    cutout_size = image_size * ratio[0] // ratio[1]
+    cutout_size = image_size * alpha
     offset_x = tf.random.uniform([tf.shape(x)[0], 1, 1], maxval=image_size[0] + (1 - cutout_size[0] % 2), dtype=tf.int32)
     offset_y = tf.random.uniform([tf.shape(x)[0], 1, 1], maxval=image_size[1] + (1 - cutout_size[1] % 2), dtype=tf.int32)
     grid_batch, grid_x, grid_y = tf.meshgrid(tf.range(batch_size, dtype=tf.int32), tf.range(cutout_size[0], dtype=tf.int32), tf.range(cutout_size[1], dtype=tf.int32), indexing='ij')
@@ -145,6 +163,7 @@ def cutmix(image, alpha=alpha_default):
     as variable shape tensors may not work on tpus.
 
     :param image:
+    :param alpha: float, strength of augmentation.
     :return:
     """
     # output - a batch of images with cutmix applied
