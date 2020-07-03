@@ -10,7 +10,7 @@
 import tensorflow as tf
 import os
 import math
-import random
+import functools
 
 
 def augment(batch, policy='', channels_first=True, mode='gpu', probability=None):
@@ -74,7 +74,7 @@ def augment(batch, policy='', channels_first=True, mode='gpu', probability=None)
 
 
 alpha_default = 0.1  # set default alpha for spatial augmentations
-colour_alpha_default = 0.1  # set default alpha for colour augmentations
+colour_alpha_default = 0.05  # set default alpha for colour augmentations
 alpha_override = float(os.environ.get('SPATIAL_AUGS_ALPHA', '0'))
 colour_alpha_override = float(os.environ.get('COLOUR_AUGS_ALPHA', '0'))
 if alpha_override > 0:
@@ -87,6 +87,94 @@ if colour_alpha_override > 0:
         colour_alpha_override = 0.999
     print(f'Overriding default colour alpha setting - setting to {colour_alpha_override}')
     colour_alpha_default = colour_alpha_override
+
+def op_scope(fn, name=None):
+    if name is None:
+        name = fn.__name__
+    @functools.wraps(fn)
+    def _fn(*args, **kwargs):
+        with tf.name_scope(fn.__name__):
+            return fn(*args, **kwargs)
+    return _fn
+
+# ----------------------------------------------------------------------------
+# Util functions:
+
+
+# TODO: why doesn't this work on tpu
+def random_apply(func, p, x):
+    """Randomly apply function func to x with probability p."""
+    return tf.cond(
+      tf.less(tf.random_uniform([], minval=0, maxval=1, dtype=tf.float32),
+              tf.cast(p, tf.float32)),
+      lambda: func(x),
+      lambda: x)
+
+
+def _pad_to_bounding_box(img, offset_height, offset_width, target_height,
+                        target_width):
+    """Pad `image` with zeros to the specified `height` and `width`.
+    Adds `offset_height` rows of zeros on top, `offset_width` columns of
+    zeros on the left, and then pads the image on the bottom and right
+    with zeros until it has dimensions `target_height`, `target_width`.
+    This op does nothing if `offset_*` is zero and the image already has size
+    `target_height` by `target_width`. [Doesn't work on tpu.]
+
+    Args:
+    image: 3-D Tensor of shape `[height, width, channels]`
+    offset_height: Number of rows of zeros to add on top.
+    offset_width: Number of columns of zeros to add on the left.
+    target_height: Height of output image.
+    target_width: Width of output image.
+    Returns:
+    3-D float Tensor of shape
+    `[target_height, target_width, channels]`
+    """
+    shape = tf.shape(img)
+
+    height = shape[0]
+    width = shape[1]
+    after_padding_width = target_width - offset_width - width
+    after_padding_height = target_height - offset_height - height
+    # Do not pad on the depth dimension.
+    paddings = tf.reshape(tf.stack([offset_height, after_padding_height, offset_width, after_padding_width, 0, 0]), [3, 2])
+    return tf.pad(img, paddings)
+
+
+def round_up_to_even(f):
+    return math.ceil(f / 2.) * 2
+
+
+def get_matrix(rotation, shear, height_zoom, width_zoom, height_shift, width_shift):
+    """
+    returns 3x3 transform matrix which transforms indices in the image tensor
+    """
+
+    # CONVERT DEGREES TO RADIANS
+    rotation = math.pi * rotation / 180.
+    shear = math.pi * shear / 180.
+
+    # ROTATION MATRIX
+    c1 = tf.math.cos(rotation)
+    s1 = tf.math.sin(rotation)
+    one = tf.constant([1], dtype='float32')
+    zero = tf.constant([0], dtype='float32')
+    rotation_matrix = tf.reshape(tf.concat([c1, s1, zero, -s1, c1, zero, zero, zero, one], axis=0), [3, 3])
+
+    # SHEAR MATRIX
+    c2 = tf.math.cos(shear)
+    s2 = tf.math.sin(shear)
+    shear_matrix = tf.reshape(tf.concat([one, s2, zero, zero, c2, zero, zero, zero, one], axis=0), [3, 3])
+
+    # ZOOM MATRIX
+    zoom_matrix = tf.reshape(
+        tf.concat([one / height_zoom, zero, zero, zero, one / width_zoom, zero, zero, zero, one], axis=0), [3, 3])
+
+    # SHIFT MATRIX
+    shift_matrix = tf.reshape(tf.concat([one, zero, height_shift, zero, one, width_shift, zero, zero, one], axis=0),
+                              [3, 3])
+
+    return tf.tensordot(tf.tensordot(rotation_matrix, shear_matrix, 1), tf.tensordot(zoom_matrix, shift_matrix, 1), 1)
 
 # ----------------------------------------------------------------------------
 # GPU Batch augmentations:
@@ -166,24 +254,17 @@ def cutmix(image, alpha=alpha_default):
     :param alpha: float, strength of augmentation.
     :return:
     """
-    # output - a batch of images with cutmix applied
+
     dimensions = image.shape[1]
     batch_size = image.shape[0]
-
     imgs = []
-    # since random compilation breaks the tpu and the dataset is assumed to be in random order anyway
-    # just mix every image with a pre-shuffled list generated at runtime
-    # TODO: is this an awful idea?
-    shuffled_list = list(range(batch_size))
-    random.shuffle(shuffled_list)
+
+    foo = [image[i] for i in range(batch_size)]
+
     for j in range(batch_size):
-        # CHOOSE RANDOM IMAGE TO CUTMIX WITH
-        c = shuffled_list[j]
-        # MAKE CUTMIX IMAGE
-        indices = tf.constant([j])
-        one = tf.squeeze(tf.gather(image, indices))
-        indices = tf.constant([c])
-        two = tf.squeeze(tf.gather(image, indices))
+        one = foo[j]
+        i = tf.random.uniform([], minval=0, maxval=batch_size, dtype=tf.int32)
+        two = tf.switch_case(i, {index: lambda: foo[index] for index in range(batch_size)})
 
         def do_cutout(one):
             mask = random_cutout_tpu(tf.ones_like(two), alpha=alpha)
@@ -192,16 +273,16 @@ def cutmix(image, alpha=alpha_default):
             return tf.add(foreground, background)
 
         # don't do anything if randomly selected image is current image
-        out = tf.cond(tf.reduce_all(tf.equal(j, c)), lambda: one, lambda: do_cutout(one))
+        out = tf.cond(tf.reduce_all(tf.equal(j, i)), lambda: one, lambda: do_cutout(one))
         imgs.append(out)
 
     out = tf.reshape(tf.stack(imgs), (batch_size, dimensions, dimensions, 3))
     return out
 
-
 BATCH_AUGMENT_FNS = {
     'color': [rand_brightness, rand_color, rand_contrast],
     'colour': [rand_brightness, rand_color, rand_contrast],  # American spelling is a crime
+    'brightness': [rand_brightness],
     'batchcutout': [batch_cutout],
     'mirrorh': [tf.image.random_flip_left_right],
     'mirrorv': [tf.image.random_flip_up_down],
@@ -479,7 +560,6 @@ def apply_random_zoom(x, seed=None):
         x = tf.cond(tf.reduce_all(tf.equal(choice, tf.constant(0))), lambda: zoom_in(x, seed=seed), lambda: zoom_out(x, seed=seed))
         return x
 
-
 def apply_random_aug(x, seed=None):
     with tf.name_scope('RandomAugmentations'):
         x.set_shape(x.shape)
@@ -509,40 +589,51 @@ SINGLE_IMG_FNS = {
 # TPU single image augmentations.
 
 
-def zoom_in_tpu(image):
-    return tpu_transform(image, zoomopt='zoomin', transopt='xy')
+def zoom_in_tpu(img, alpha=alpha_default):
+    x_offset = tf.random.uniform([], minval=-alpha, maxval=alpha)
+    y_offset = tf.random.uniform([], minval=-alpha, maxval=alpha)
+    zoomlvl = tf.random.uniform([], minval=1-alpha, maxval=alpha)
+    return tf_image_translate(img, x_offset, y_offset, zoom=zoomlvl, data_format="NHWC", wrap_mode="reflect")
 
 
-def zoom_out_tpu(image):
-    return tpu_transform(image, zoomopt='zoomout', transopt='xy')
+def zoom_out_tpu(img, alpha=alpha_default):
+    x_offset = tf.random.uniform([], minval=-alpha, maxval=alpha)
+    y_offset = tf.random.uniform([], minval=-alpha, maxval=alpha)
+    zoomlvl = tf.random.uniform([], minval=1, maxval=1+alpha)
+    return tf_image_translate(img, x_offset, y_offset, zoom=zoomlvl, data_format="NHWC", wrap_mode="reflect")
 
 
-def random_zoom_tpu(image):
-    return tpu_transform(image, zoomopt='both', transopt='xy')
+def random_zoom_tpu(img, alpha=alpha_default):
+    x_offset = tf.random.uniform([], minval=-alpha, maxval=alpha)
+    y_offset = tf.random.uniform([], minval=-alpha, maxval=alpha)
+    zoomlvl = tf.random.uniform([], minval=1-alpha, maxval=1+alpha)
+    return tf_image_translate(img, x_offset, y_offset, zoom=zoomlvl, data_format="NHWC", wrap_mode="reflect")
 
 
-def x_translate_tpu(image):
-    return tpu_transform(image, zoomopt='none', transopt='x')
+def x_translate_tpu(img, alpha=alpha_default):
+    x_offset = tf.random.uniform([], minval=-alpha, maxval=alpha)
+    y_offset = 0
+    return tf_image_translate(img, x_offset, y_offset, zoom=1.0, data_format="NHWC", wrap_mode="reflect")
 
 
-def y_translate_tpu(image):
-    return tpu_transform(image, zoomopt='none', transopt='y')
+def y_translate_tpu(img, alpha=alpha_default):
+    x_offset = 0
+    y_offset = tf.random.uniform([], minval=-alpha, maxval=alpha)
+    return tf_image_translate(img, x_offset, y_offset, zoom=1.0, data_format="NHWC", wrap_mode="reflect")
 
 
-def xy_translate_tpu(image):
-    return tpu_transform(image, zoomopt='none', transopt='xy')
+def xy_translate_tpu(img, alpha=alpha_default):
+    x_offset = tf.random.uniform([], minval=-alpha, maxval=alpha)
+    y_offset = tf.random.uniform([], minval=-alpha, maxval=alpha)
+    return tf_image_translate(img, x_offset, y_offset, zoom=1.0, data_format="NHWC", wrap_mode="reflect")
 
 
 def random_rotate(image):
-    return tpu_transform(image, zoomopt='none', transopt='', rotate=True)
+    return matrix_transform(image, zoomopt='none', transopt='', rotate=True)
 
 
 def random_shear(image):
-    return tpu_transform(image, zoomopt='none', transopt='', shear=True)
-
-
-def all_transforms(image):
-    return tpu_transform(image, zoomopt='both', transopt='xy', rotate=True, shear=True)
+    return matrix_transform(image, zoomopt='none', transopt='', shear=True)
 
 
 def random_cutout_tpu(img, alpha=alpha_default):
@@ -553,6 +644,7 @@ def random_cutout_tpu(img, alpha=alpha_default):
     :param alpha:
     :return:
     """
+    print('in random cutout')
     # make blank img of same size
     assert img.shape[0] % 2 == 0
     assert img.shape[1] % 2 == 0
@@ -564,12 +656,12 @@ def random_cutout_tpu(img, alpha=alpha_default):
     padshapeY = tf.cast((dimensions - x) / 2, dtype=tf.int32)
     paddings = [[padshapeY, padshapeY], [padshapeX, padshapeX], [0, 0]]
     padded_blank = tf.pad(blank, paddings, constant_values=0)
-    mask = 1 - tpu_transform(padded_blank, alpha=1 - alpha, zoomopt='zoomout', transopt='xy', rotate=True, shear=True)
+    mask = 1 - matrix_transform(padded_blank, alpha=1 - alpha, zoomopt='zoomout', transopt='xy', rotate=True, shear=True)
     erased_img = tf.multiply(img, mask)
     return erased_img
 
 
-def tpu_transform(image, alpha=alpha_default, zoomopt='zoomin', transopt='xy', rotate=False, shear=False):
+def matrix_transform(image, alpha=alpha_default, zoomopt='zoomin', transopt='xy', rotate=False, shear=False):
     """
     Does various matrix based transformations of a 3-D image tensor.
     Pads edges with the values at that edge in the original image.
@@ -648,14 +740,33 @@ def apply_random_aug_tpu(x):
     :return: 3-D Tensor of shape `[height, width, channels]`
     """
     x.set_shape(x.shape)
-    choice = tf.random_uniform([], 0, 6, tf.int32)
-    x = tf.cond(tf.reduce_all(tf.equal(choice, tf.constant(0))), lambda: zoom_in_tpu(x), lambda: x)
-    x = tf.cond(tf.reduce_all(tf.equal(choice, tf.constant(1))), lambda: zoom_out_tpu(x), lambda: x)
-    x = tf.cond(tf.reduce_all(tf.equal(choice, tf.constant(2))), lambda: x_translate_tpu(x), lambda: x)
-    x = tf.cond(tf.reduce_all(tf.equal(choice, tf.constant(3))), lambda: y_translate_tpu(x), lambda: x)
-    x = tf.cond(tf.reduce_all(tf.equal(choice, tf.constant(4))), lambda: xy_translate_tpu(x), lambda: x)
-    x = tf.cond(tf.reduce_all(tf.equal(choice, tf.constant(5))), lambda: random_cutout_tpu(x), lambda: x)
-    return x
+    choice = tf.random_uniform([], 0, 3, tf.int32)
+
+    def rz(): return random_zoom_tpu(x)
+
+    def xy(): return xy_translate_tpu(x)
+
+    def rc(): return random_cutout_tpu(x)
+
+    #from Key: {i: (lambda x : lambda : func(x))(N) for i,func in enumerate([a,b])} ?
+
+    return tf.switch_case(choice, branch_fns={0: rz, 1: xy, 2: rc})
+
+
+def p_cutout(x):
+    return random_apply_tpu(x, random_cutout, 0.50)
+
+def random_apply_tpu(x, f, p):
+    choice = tf.random_uniform([], 0, 3, tf.int32)
+
+    def do_fn(): return f(x)
+
+    def nothing(): return x
+
+    fns = [do_fn] * int(p*10)
+    while len(fns) < 100:
+        fns.append(nothing)
+    return tf.switch_case(choice, branch_fns={i: x for i, x in enumerate(fns)})
 
 
 SINGLE_IMG_FNS_TPU = {
@@ -669,84 +780,76 @@ SINGLE_IMG_FNS_TPU = {
     'random': [apply_random_aug_tpu],
 }
 
-# ----------------------------------------------------------------------------
-# Util functions:
-
-
-# TODO: why doesn't this work on tpu
-def random_apply(func, p, x):
-    """Randomly apply function func to x with probability p."""
-    return tf.cond(
-      tf.less(tf.random_uniform([], minval=0, maxval=1, dtype=tf.float32),
-              tf.cast(p, tf.float32)),
-      lambda: func(x),
-      lambda: x)
-
-
-def _pad_to_bounding_box(img, offset_height, offset_width, target_height,
-                        target_width):
-    """Pad `image` with zeros to the specified `height` and `width`.
-    Adds `offset_height` rows of zeros on top, `offset_width` columns of
-    zeros on the left, and then pads the image on the bottom and right
-    with zeros until it has dimensions `target_height`, `target_width`.
-    This op does nothing if `offset_*` is zero and the image already has size
-    `target_height` by `target_width`. [Doesn't work on tpu.]
-
-    Args:
-    image: 3-D Tensor of shape `[height, width, channels]`
-    offset_height: Number of rows of zeros to add on top.
-    offset_width: Number of columns of zeros to add on the left.
-    target_height: Height of output image.
-    target_width: Width of output image.
-    Returns:
-    3-D float Tensor of shape
-    `[target_height, target_width, channels]`
-    """
-    shape = tf.shape(img)
-
-    height = shape[0]
-    width = shape[1]
-    after_padding_width = target_width - offset_width - width
-    after_padding_height = target_height - offset_height - height
-    # Do not pad on the depth dimension.
-    paddings = tf.reshape(tf.stack([offset_height, after_padding_height, offset_width, after_padding_width, 0, 0]), [3, 2])
-    return tf.pad(img, paddings)
-
-
-def round_up_to_even(f):
-    return math.ceil(f / 2.) * 2
-
-
-def get_matrix(rotation, shear, height_zoom, width_zoom, height_shift, width_shift):
-    """
-    returns 3x3 transform matrix which transforms indices in the image tensor
-    """
-
-    # CONVERT DEGREES TO RADIANS
-    rotation = math.pi * rotation / 180.
-    shear = math.pi * shear / 180.
-
-    # ROTATION MATRIX
-    c1 = tf.math.cos(rotation)
-    s1 = tf.math.sin(rotation)
-    one = tf.constant([1], dtype='float32')
-    zero = tf.constant([0], dtype='float32')
-    rotation_matrix = tf.reshape(tf.concat([c1, s1, zero, -s1, c1, zero, zero, zero, one], axis=0), [3, 3])
-
-    # SHEAR MATRIX
-    c2 = tf.math.cos(shear)
-    s2 = tf.math.sin(shear)
-    shear_matrix = tf.reshape(tf.concat([one, s2, zero, zero, c2, zero, zero, zero, one], axis=0), [3, 3])
-
-    # ZOOM MATRIX
-    zoom_matrix = tf.reshape(
-        tf.concat([one / height_zoom, zero, zero, zero, one / width_zoom, zero, zero, zero, one], axis=0), [3, 3])
-
-    # SHIFT MATRIX
-    shift_matrix = tf.reshape(tf.concat([one, zero, height_shift, zero, one, width_shift, zero, zero, one], axis=0),
-                              [3, 3])
-
-    return tf.tensordot(tf.tensordot(rotation_matrix, shear_matrix, 1), tf.tensordot(zoom_matrix, shift_matrix, 1), 1)
-
-
 # TODO: test gridmask from here: https://www.kaggle.com/xiejialun/gridmask-data-augmentation-with-tensorflow
+
+# ----------------------------------------------------------------------------
+# TF image rasterizer by Shawwn: https://github.com/shawwn/tfimg/blob/master/aug.py#L37
+
+@op_scope
+def ti32(x):
+  return tf.cast( x, tf.int32 )
+
+
+@op_scope
+def tf32(x):
+  return tf.cast( x, tf.float32 )
+
+
+@op_scope
+def clamp(v, min=0., max=1.):
+  return tf.clip_by_value(v, min, max)
+
+
+@op_scope
+def wrap(v, wrap_mode="reflect"):
+  assert wrap_mode in ["clamp", "wrap", "reflect"]
+  if wrap_mode == "wrap":
+    return tf.math.floormod(v, 1.0)
+  elif wrap_mode == "reflect":
+    return 1.0 - tf.abs(tf.math.floormod(v, 2.0) - 1.0)
+  elif wrap_mode == "clamp":
+    return clamp(v)
+
+
+@op_scope
+def iround(u):
+  return ti32(tf.math.floordiv(tf32(u), 1.0))
+
+
+@op_scope
+def tf_image_translate(img, x_offset, y_offset, zoom=1.0, data_format="NHWC", wrap_mode="reflect"):
+  # "NCHW" not implemented for now; handled by transpose in tf_image_translate
+  #assert data_format in ["NHWC", "NCHW"]
+  assert data_format in ["NHWC"]
+  shape = tf.shape(img)
+  if data_format == "NHWC":
+    h, w, c = shape[0], shape[1], shape[2]
+  else:
+    c, h, w = shape[0], shape[1], shape[2]
+
+  DUDX = 1.0 / tf32(w) * zoom
+  DUDY = 0.0
+  DVDX = 0.0
+  DVDY = 1.0 / tf32(h) * zoom
+
+  X1 = 0
+  Y1 = 0
+  U1 = x_offset
+  V1 = y_offset
+
+  # Calculate UV at screen origin.
+  U = U1 - DUDX*tf32(X1) - DUDY*tf32(Y1)
+  V = V1 - DVDX*tf32(X1) - DVDY*tf32(Y1)
+
+  u  = tf.cumsum(tf.fill([h, w], DUDX), 1)
+  u += tf.cumsum(tf.fill([h, w], DUDY), 0)
+  u += U
+  v  = tf.cumsum(tf.fill([h, w], DVDX), 1)
+  v += tf.cumsum(tf.fill([h, w], DVDY), 0)
+  v += V
+  uv = tf.stack([v, u], 2)
+
+  th, tw = h, w
+  uv = clamp(iround(wrap(uv, wrap_mode) * [tw, th]), 0, [tw-1, th-1])
+  color = tf.gather_nd(img, uv)
+  return color
