@@ -23,6 +23,9 @@ if augmentations:
 else:
   augment = False
 augmentation_policy = os.environ.get('AUG_POLICY', 'random')
+augmentation_prob = int(os.environ.get('AUG_PROB', '0'))
+if augmentation_prob == 0:
+    augmentation_prob = None
 save_image_summaries = int(os.environ.get('AUGS_IMAGE_SUMMARIES', '0'))
 
 def G_logistic(G, D, opt, training_set, minibatch_size):
@@ -34,7 +37,7 @@ def G_logistic(G, D, opt, training_set, minibatch_size):
         # if save_image_summaries:
         #     with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
         #         tf.summary.image("fakes_pre-augment", fake_images_out)
-        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu')
+        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu', probability=augmentation_prob)
         # if save_image_summaries:
         #     with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
         #         tf.summary.image("fakes_post-augment", fake_images_out)
@@ -51,7 +54,7 @@ def G_logistic_ns(G, D, opt, training_set, minibatch_size):
         # if save_image_summaries:
         #     with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
         #         tf.summary.image("fakes_pre-augment", fake_images_out)
-        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu')
+        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu', probability=augmentation_prob)
         # if save_image_summaries:
         #     with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
         #         tf.summary.image("fakes_post-augment", fake_images_out)
@@ -64,7 +67,7 @@ def D_logistic(G, D, opt, training_set, minibatch_size, reals, labels):
         if save_image_summaries:
             with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
                 tf.summary.image("reals_pre-augment", reals)
-        reals = RFAugment.augment(reals, policy=augmentation_policy, mode='gpu')
+        reals = RFAugment.augment(reals, policy=augmentation_policy, mode='gpu', probability=augmentation_prob)
         if save_image_summaries:
             with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
                 tf.summary.image("reals_post-augment", reals)
@@ -72,7 +75,7 @@ def D_logistic(G, D, opt, training_set, minibatch_size, reals, labels):
     latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])
     fake_images_out = G.get_output_for(latents, labels, is_training=True)
     if augment:
-        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu')
+        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu', probability=augmentation_prob)
     real_scores_out = D.get_output_for(reals, labels, is_training=True)
     fake_scores_out = D.get_output_for(fake_images_out, labels, is_training=True)
     real_scores_out = autosummary('Loss/scores/real', real_scores_out)
@@ -90,7 +93,7 @@ def D_logistic_r1(G, D, opt, training_set, minibatch_size, reals, labels, gamma=
         if save_image_summaries:
             with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
                 tf.summary.image("reals_pre-augment", reals)
-        reals = RFAugment.augment(reals, policy=augmentation_policy, mode='gpu')
+        reals = RFAugment.augment(reals, policy=augmentation_policy, mode='gpu', probability=augmentation_prob)
         if save_image_summaries:
             with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
                 tf.summary.image("reals_post-augment", reals)
@@ -98,7 +101,7 @@ def D_logistic_r1(G, D, opt, training_set, minibatch_size, reals, labels, gamma=
     latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])
     fake_images_out = G.get_output_for(latents, labels, is_training=True)
     if augment:
-        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu')
+        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu', probability=augmentation_prob)
 
     real_scores_out = D.get_output_for(reals, labels, is_training=True)
     fake_scores_out = D.get_output_for(fake_images_out, labels, is_training=True)
@@ -119,7 +122,7 @@ def D_logistic_r2(G, D, opt, training_set, minibatch_size, reals, labels, gamma=
         if save_image_summaries:
             with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
                 tf.summary.image("reals_pre-augment", reals)
-        reals = RFAugment.augment(reals, policy=augmentation_policy, mode='gpu')
+        reals = RFAugment.augment(reals, policy=augmentation_policy, mode='gpu', probability=augmentation_prob)
         if save_image_summaries:
             with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
                 tf.summary.image("reals_post-augment", reals)
@@ -127,7 +130,7 @@ def D_logistic_r2(G, D, opt, training_set, minibatch_size, reals, labels, gamma=
     latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])
     fake_images_out = G.get_output_for(latents, labels, is_training=True)
     if augment:
-        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu')
+        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu', probability=augmentation_prob)
     real_scores_out = D.get_output_for(reals, labels, is_training=True)
     fake_scores_out = D.get_output_for(fake_images_out, labels, is_training=True)
     real_scores_out = autosummary('Loss/scores/real', real_scores_out)
@@ -151,7 +154,7 @@ def G_wgan(G, D, opt, training_set, minibatch_size):
     labels = training_set.get_random_labels_tf(minibatch_size)
     fake_images_out = G.get_output_for(latents, labels, is_training=True)
     if augment:
-        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu')
+        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu', probability=augmentation_prob)
     fake_scores_out = D.get_output_for(fake_images_out, labels, is_training=True)
     loss = -fake_scores_out
     return loss, None
@@ -161,7 +164,7 @@ def D_wgan(G, D, opt, training_set, minibatch_size, reals, labels, wgan_epsilon=
         if save_image_summaries:
             with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
                 tf.summary.image("reals_pre-augment", reals)
-        reals = RFAugment.augment(reals, policy=augmentation_policy, mode='gpu')
+        reals = RFAugment.augment(reals, policy=augmentation_policy, mode='gpu', probability=augmentation_prob)
         if save_image_summaries:
             with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
                 tf.summary.image("reals_post-augment", reals)
@@ -169,7 +172,7 @@ def D_wgan(G, D, opt, training_set, minibatch_size, reals, labels, wgan_epsilon=
     latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])
     fake_images_out = G.get_output_for(latents, labels, is_training=True)
     if augment:
-        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu')
+        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu', probability=augmentation_prob)
     real_scores_out = D.get_output_for(reals, labels, is_training=True)
     fake_scores_out = D.get_output_for(fake_images_out, labels, is_training=True)
     real_scores_out = autosummary('Loss/scores/real', real_scores_out)
@@ -189,7 +192,7 @@ def D_wgan_gp(G, D, opt, training_set, minibatch_size, reals, labels, wgan_lambd
         if save_image_summaries:
             with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
                 tf.summary.image("reals_pre-augment", reals)
-        reals = RFAugment.augment(reals, policy=augmentation_policy, mode='gpu')
+        reals = RFAugment.augment(reals, policy=augmentation_policy, mode='gpu', probability=augmentation_prob)
         if save_image_summaries:
             with tf.name_scope('ImageSummaries'), tf.device('/cpu:0'):
                 tf.summary.image("reals_post-augment", reals)
@@ -197,7 +200,7 @@ def D_wgan_gp(G, D, opt, training_set, minibatch_size, reals, labels, wgan_lambd
     latents = tf.random_normal([minibatch_size] + G.input_shapes[0][1:])
     fake_images_out = G.get_output_for(latents, labels, is_training=True)
     if augment:
-        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu')
+        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu', probability=augmentation_prob)
     real_scores_out = D.get_output_for(reals, labels, is_training=True)
     fake_scores_out = D.get_output_for(fake_images_out, labels, is_training=True)
     real_scores_out = autosummary('Loss/scores/real', real_scores_out)
@@ -229,7 +232,7 @@ def G_logistic_ns_pathreg(G, D, opt, training_set, minibatch_size, pl_minibatch_
     labels = training_set.get_random_labels_tf(minibatch_size)
     fake_images_out, fake_dlatents_out = G.get_output_for(latents, labels, is_training=True, return_dlatents=True)
     if augment:
-        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu')
+        fake_images_out = RFAugment.augment(fake_images_out, policy=augmentation_policy, mode='gpu', probability=augmentation_prob)
     fake_scores_out = D.get_output_for(fake_images_out, labels, is_training=True)
     loss = tf.nn.softplus(-fake_scores_out) # -log(sigmoid(fake_scores_out))
 
