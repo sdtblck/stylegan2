@@ -54,8 +54,8 @@ def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, m
       os.environ['AUGS'] = "1"
     else:
       os.environ['AUGS'] = "0"
-    train.image_snapshot_ticks = 1
-    train.network_snapshot_ticks = 1
+    train.image_snapshot_ticks = 4
+    train.network_snapshot_ticks = 4
     sched.D_lrate_base = lr
     sched.G_lrate_base = 0.5 * sched.D_lrate_base # two time update rule enforced
     sched.minibatch_size_base = 192
