@@ -5,6 +5,9 @@
 
    reals = RFAugment.augment(reals, policy='zoom in', channels_first=True, mode='tpu')
 
+   TODO: implement adaptive scheduling
+   TODO: fix random_apply to work on tpus
+   TODO: get image summaries working for GPU
    TODO: More augs here https://github.com/google/automl/blob/master/efficientdet/aug/autoaugment.py"""
 
 import tensorflow as tf
@@ -16,7 +19,6 @@ import functools
 def augment(batch, policy='', channels_first=True, mode='gpu', probability=None):
     batch_size = os.environ.get('BATCH_PER', '?')
     if probability is not None:
-        raise NotImplementedError('Sorry - probability is not implemented yet')
         probability = float(max(min(probability, 1), 0)) # clamp p to a float between 0 and 1
     if batch_size == '?':
       print('BATCH SIZE: ', batch_size)
@@ -35,19 +37,23 @@ def augment(batch, policy='', channels_first=True, mode='gpu', probability=None)
             for pol in policy.split(','):
                 pol = pol.replace(" ", "")
                 if pol in BATCH_AUGMENT_FNS:
-                    for f in BATCH_AUGMENT_FNS[pol]:
-                        print('POLICY : ', pol)
-                        if probability is None:
+                    if probability is None:
+                        for f in BATCH_AUGMENT_FNS[pol]:
+                            print('POLICY : ', pol)
                             batch = f(batch)
-                        if probability is not None:
-                            batch = random_apply(f, probability, batch)
+                    else:
+                        for f in BATCH_AUGMENT_FNS_P[pol]:
+                            print('POLICY : ', pol)
+                            batch = f(batch)
                 elif pol in SINGLE_IMG_FNS:
-                    for f in SINGLE_IMG_FNS[pol]:
-                        print('POLICY : ', pol)
-                        if probability is None:
+                    if probability is None:
+                        for f in SINGLE_IMG_FNS[pol]:
+                            print('POLICY : ', pol)
                             batch = tf.map_fn(f, batch)
-                        else:
-                            batch = tf.map_fn(lambda inp: random_apply(inp[0], inp[1], inp[2]), (f, probability, batch))
+                    else:
+                        for f in SINGLE_IMG_FNS_P[pol]:
+                            print('POLICY : ', pol)
+                            batch = tf.map_fn(f, batch)
             if channels_first:
                 batch = tf.transpose(batch, [0, 3, 1, 2])
         return batch
@@ -292,6 +298,34 @@ def random_apply(func, p, x):
       lambda: func(x),
       lambda: x)
 
+
+def p_rand_brightness(img, p=augmentation_prob):
+    return random_apply(rand_brightness, p, img)
+
+
+def p_rand_color(img, p=augmentation_prob):
+    return random_apply(rand_color, p, img)
+
+
+def p_rand_contrast(img, p=augmentation_prob):
+    return random_apply(rand_contrast, p, img)
+
+
+def p_batch_cutout(img, p=augmentation_prob):
+    return random_apply(batch_cutout, p, img)
+
+
+def p_flip_lr(img, p=augmentation_prob):
+    return random_apply(tf.image.random_flip_left_right, p, img)
+
+
+def p_flip_ud(img, p=augmentation_prob):
+    return random_apply(tf.image.random_flip_up_down, p, img)
+
+
+def p_cutmix(img, p=augmentation_prob):
+    return random_apply(cutmix, p, img)
+
 # GPU Augmentations applied batchwise
 BATCH_AUGMENT_FNS = {
     'color': [rand_brightness, rand_color, rand_contrast],
@@ -305,15 +339,15 @@ BATCH_AUGMENT_FNS = {
 
 # GPU Augmentations applied batchwise with probability
 # (According to Karras et al. this stops the augmentations from leaking to G's output.)
-# BATCH_AUGMENT_FNS_P = {
-#     'color': [p_rand_brightness, p_rand_color, p_rand_contrast],
-#     'colour': [p_rand_brightness, p_rand_color, p_rand_contrast],
-#     'brightness': [p_rand_brightness],
-#     'batchcutout': [p_batch_cutout],
-#     'mirrorh': [p_flip_lr],
-#     'mirrorv': [p_flip_ud],
-#     'cutmix': [p_cutmix]
-# }
+BATCH_AUGMENT_FNS_P = {
+    'color': [p_rand_brightness, p_rand_color, p_rand_contrast],
+    'colour': [p_rand_brightness, p_rand_color, p_rand_contrast],
+    'brightness': [p_rand_brightness],
+    'batchcutout': [p_batch_cutout],
+    'mirrorh': [p_flip_lr],
+    'mirrorv': [p_flip_ud],
+    'cutmix': [p_cutmix]
+}
 
 # TPU Augmentations applied batchwise
 BATCH_AUGMENT_FNS_TPU = {
@@ -604,6 +638,7 @@ def apply_random_aug(x, seed=None):
 # ----------------------------------------------------------------------------
 # GPU only single image augmentations with probability
 
+
 def p_zoom_in(img, p=augmentation_prob):
     return random_apply(zoom_in, p, img)
 
@@ -634,6 +669,7 @@ def p_random_cutout(img, p=augmentation_prob):
 
 def p_apply_random_aug(img, p=augmentation_prob):
     return random_apply(apply_random_aug, p, img)
+
 
 # GPU augmentations applied individually
 SINGLE_IMG_FNS = {
