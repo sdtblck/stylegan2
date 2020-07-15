@@ -17,9 +17,6 @@ def augment(batch, policy='', channels_first=True, mode='gpu', probability=None)
     batch_size = os.environ.get('BATCH_PER', '?')
     if probability is not None:
         probability = float(max(min(probability, 1), 0)) # clamp p to a float between 0 and 1
-    if batch_size == '?':
-      print('BATCH SIZE: ', batch_size)
-      raise Exception('Some augmentations need a static batch size to run.\n Please set environment variable BATCH_PER to your batch size')
     else:
       batch_size = int(batch_size)
     batch.set_shape((batch_size, None, None, None))
@@ -51,6 +48,9 @@ def augment(batch, policy='', channels_first=True, mode='gpu', probability=None)
                 batch = tf.transpose(batch, [0, 3, 1, 2])
         return batch
     elif mode == 'tpu':
+        if batch_size == '?':
+            print('BATCH SIZE: ', batch_size)
+            raise Exception('Some augmentations need a static batch size to run.\n Please set environment variable BATCH_PER to your batch size')
         print('Augmenting reals and fake in tpu mode')
         if probability is not None:
             print('ERROR: Random applications may not work on tpu')
