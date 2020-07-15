@@ -16,10 +16,11 @@ import functools
 def augment(batch, policy='', channels_first=True, mode='gpu', probability=None):
     batch_size = os.environ.get('BATCH_PER', '?')
     if probability is not None:
+        raise NotImplementedError('Sorry - probability is not implemented yet')
         probability = float(max(min(probability, 1), 0)) # clamp p to a float between 0 and 1
     if batch_size == '?':
       print('BATCH SIZE: ', batch_size)
-      raise Exception('Some augmentations need a static batch size to run.\n Please set environment variable BATCH_PER to your batch size')
+      raise Exception('Some augmentations need a known batch size to run.\n Please set environment variable BATCH_PER to your batch size')
     else:
       batch_size = int(batch_size)
     batch.set_shape((batch_size, None, None, None))
@@ -39,7 +40,7 @@ def augment(batch, policy='', channels_first=True, mode='gpu', probability=None)
                         if probability is None:
                             batch = f(batch)
                         if probability is not None:
-                            random_apply(f, probability, batch)
+                            batch = random_apply(f, probability, batch)
                 elif pol in SINGLE_IMG_FNS:
                     for f in SINGLE_IMG_FNS[pol]:
                         print('POLICY : ', pol)
@@ -77,6 +78,7 @@ alpha_default = 0.1  # set default alpha for spatial augmentations
 colour_alpha_default = 0.1  # set default alpha for colour augmentations
 alpha_override = float(os.environ.get('SPATIAL_AUGS_ALPHA', '0'))
 colour_alpha_override = float(os.environ.get('COLOUR_AUGS_ALPHA', '0'))
+augmentation_prob = float(os.environ.get('AUG_PROB', '0'))
 if alpha_override > 0:
     if alpha_override >= 1:
         alpha_override = 0.999
@@ -279,6 +281,18 @@ def cutmix(image, alpha=alpha_default):
     out = tf.reshape(tf.stack(imgs), (batch_size, dimensions, dimensions, 3))
     return out
 
+# ----------------------------------------------------------------------------
+# GPU only batch augmentations with probability
+
+def random_apply(func, p, x):
+    """Randomly apply function func to x with probability p."""
+    return tf.cond(
+      tf.less(tf.random_uniform([], minval=0, maxval=1, dtype=tf.float32),
+              tf.cast(p, tf.float32)),
+      lambda: func(x),
+      lambda: x)
+
+# GPU Augmentations applied batchwise
 BATCH_AUGMENT_FNS = {
     'color': [rand_brightness, rand_color, rand_contrast],
     'colour': [rand_brightness, rand_color, rand_contrast],  # American spelling is a crime
@@ -289,6 +303,19 @@ BATCH_AUGMENT_FNS = {
     'cutmix': [cutmix]
 }
 
+# GPU Augmentations applied batchwise with probability
+# (According to Karras et al. this stops the augmentations from leaking to G's output.)
+# BATCH_AUGMENT_FNS_P = {
+#     'color': [p_rand_brightness, p_rand_color, p_rand_contrast],
+#     'colour': [p_rand_brightness, p_rand_color, p_rand_contrast],
+#     'brightness': [p_rand_brightness],
+#     'batchcutout': [p_batch_cutout],
+#     'mirrorh': [p_flip_lr],
+#     'mirrorv': [p_flip_ud],
+#     'cutmix': [p_cutmix]
+# }
+
+# TPU Augmentations applied batchwise
 BATCH_AUGMENT_FNS_TPU = {
     'color': [rand_brightness, rand_color, rand_contrast],
     'colour': [rand_brightness, rand_color, rand_contrast],
@@ -560,6 +587,7 @@ def apply_random_zoom(x, seed=None):
         x = tf.cond(tf.reduce_all(tf.equal(choice, tf.constant(0))), lambda: zoom_in(x, seed=seed), lambda: zoom_out(x, seed=seed))
         return x
 
+
 def apply_random_aug(x, seed=None):
     with tf.name_scope('RandomAugmentations'):
         x.set_shape(x.shape)
@@ -573,7 +601,41 @@ def apply_random_aug(x, seed=None):
         x = tf.cond(tf.reduce_all(tf.equal(choice, tf.constant(5))), lambda: random_cutout(x, seed=seed), lambda: x)
         return x
 
+# ----------------------------------------------------------------------------
+# GPU only single image augmentations with probability
 
+def p_zoom_in(img, p=augmentation_prob):
+    return random_apply(zoom_in, p, img)
+
+
+def p_zoom_out(img, p=augmentation_prob):
+    return random_apply(zoom_out, p, img)
+
+
+def p_apply_random_zoom(img, p=augmentation_prob):
+    return random_apply(apply_random_zoom, p, img)
+
+
+def p_x_translate(img, p=augmentation_prob):
+    return random_apply(x_translate, p, img)
+
+
+def p_y_translate(img, p=augmentation_prob):
+    return random_apply(y_translate, p, img)
+
+
+def p_xy_translate(img, p=augmentation_prob):
+    return random_apply(y_translate, p, img)
+
+
+def p_random_cutout(img, p=augmentation_prob):
+    return random_apply(random_cutout, p, img)
+
+
+def p_apply_random_aug(img, p=augmentation_prob):
+    return random_apply(apply_random_aug, p, img)
+
+# GPU augmentations applied individually
 SINGLE_IMG_FNS = {
     'zoomin': [zoom_in],
     'zoomout': [zoom_out],
@@ -584,6 +646,20 @@ SINGLE_IMG_FNS = {
     'cutout': [random_cutout],
     'random': [apply_random_aug]
 }
+
+# GPU augmentations applied individually with probability
+# (According to Karras et al. this stops the augmentations from leaking to G's output.)
+SINGLE_IMG_FNS_P = {
+    'zoomin': [p_zoom_in],
+    'zoomout': [p_zoom_out],
+    'randomzoom': [p_apply_random_zoom],
+    'xtrans': [p_x_translate],
+    'ytrans': [p_y_translate],
+    'xytrans': [p_xy_translate],
+    'cutout': [p_random_cutout],
+    'random': [p_apply_random_aug]
+}
+
 
 # ----------------------------------------------------------------------------
 # TPU & GPU compatible single image augmentations.
