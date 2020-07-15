@@ -109,7 +109,6 @@ def op_scope(fn, name=None):
 # Util functions:
 
 
-# TODO: why doesn't this work on tpu
 def random_apply(func, p, x):
     """Randomly apply function func to x with probability p."""
     return tf.cond(
@@ -289,15 +288,6 @@ def cutmix(image, alpha=alpha_default):
 
 # ----------------------------------------------------------------------------
 # GPU only batch augmentations with probability
-
-def random_apply(func, p, x):
-    """Randomly apply function func to x with probability p."""
-    return tf.cond(
-      tf.less(tf.random_uniform([], minval=0, maxval=1, dtype=tf.float32),
-              tf.cast(p, tf.float32)),
-      lambda: func(x),
-      lambda: x)
-
 
 def p_rand_brightness(img, p=augmentation_prob):
     return random_apply(rand_brightness, p, img)
