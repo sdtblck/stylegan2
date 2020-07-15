@@ -23,7 +23,7 @@ if augmentations:
 else:
   augment = False
 augmentation_policy = os.environ.get('AUG_POLICY', 'random')
-augmentation_prob = int(os.environ.get('AUG_PROB', '0'))
+augmentation_prob = float(os.environ.get('AUG_PROB', '0'))
 if augmentation_prob == 0:
     augmentation_prob = None
 save_image_summaries = int(os.environ.get('AUGS_IMAGE_SUMMARIES', '0'))
